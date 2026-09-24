@@ -18,6 +18,7 @@ ${snapshotBody}
 
 const __cyc_stack = [];
 const __cyc_roots = [];
+const __cyc_frames = new Map();
 let __cyc_nextId = 1;
 
 function __enter(name, args, loc) {
@@ -36,6 +37,7 @@ function __enter(name, args, loc) {
   if (parent) parent.children.push(frame);
   else __cyc_roots.push(frame);
   __cyc_stack.push(frame);
+  __cyc_frames.set(frame.id, frame);
   return frame.id;
 }
 
@@ -62,10 +64,7 @@ function __err(id, error) {
 }
 
 function __find(id) {
-  for (let i = __cyc_stack.length - 1; i >= 0; i--) {
-    if (__cyc_stack[i].id === id) return __cyc_stack[i];
-  }
-  return null;
+  return __cyc_frames.get(id) || null;
 }
 
 function __remove(frame) {
