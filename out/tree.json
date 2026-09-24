@@ -1,677 +1,188 @@
 {
-  "version": 1790248014786,
-  "generatedAt": "2026-09-24T11:06:54.786Z",
+  "version": 1790269949784,
+  "generatedAt": "2026-09-24T17:12:29.784Z",
   "roots": [
     {
       "id": 1,
-      "name": "fib",
-      "args": [
-        7
-      ],
+      "name": "main",
+      "args": [],
       "loc": {
         "line": 1
       },
       "children": [
         {
           "id": 2,
-          "name": "fib",
+          "name": "createUser",
           "args": [
-            6
+            "Moumen"
           ],
           "loc": {
-            "line": 1
+            "line": 9
           },
           "children": [
             {
               "id": 3,
-              "name": "fib",
+              "name": "generateId",
               "args": [
-                5
+                "Moumen"
               ],
               "loc": {
-                "line": 1
+                "line": 16
               },
               "children": [
                 {
                   "id": 4,
-                  "name": "fib",
+                  "name": "normalizeName",
                   "args": [
-                    4
+                    "Moumen"
                   ],
                   "loc": {
-                    "line": 1
+                    "line": 21
                   },
-                  "children": [
-                    {
-                      "id": 5,
-                      "name": "fib",
-                      "args": [
-                        3
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [
-                        {
-                          "id": 6,
-                          "name": "fib",
-                          "args": [
-                            2
-                          ],
-                          "loc": {
-                            "line": 1
-                          },
-                          "children": [
-                            {
-                              "id": 7,
-                              "name": "fib",
-                              "args": [
-                                1
-                              ],
-                              "loc": {
-                                "line": 1
-                              },
-                              "children": [],
-                              "return": 1,
-                              "error": null,
-                              "startedAt": 1790248014763,
-                              "endedAt": 1790248014763
-                            },
-                            {
-                              "id": 8,
-                              "name": "fib",
-                              "args": [
-                                0
-                              ],
-                              "loc": {
-                                "line": 1
-                              },
-                              "children": [],
-                              "return": 0,
-                              "error": null,
-                              "startedAt": 1790248014763,
-                              "endedAt": 1790248014763
-                            }
-                          ],
-                          "return": 1,
-                          "error": null,
-                          "startedAt": 1790248014763,
-                          "endedAt": 1790248014763
-                        },
-                        {
-                          "id": 9,
-                          "name": "fib",
-                          "args": [
-                            1
-                          ],
-                          "loc": {
-                            "line": 1
-                          },
-                          "children": [],
-                          "return": 1,
-                          "error": null,
-                          "startedAt": 1790248014763,
-                          "endedAt": 1790248014763
-                        }
-                      ],
-                      "return": 2,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    },
-                    {
-                      "id": 10,
-                      "name": "fib",
-                      "args": [
-                        2
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [
-                        {
-                          "id": 11,
-                          "name": "fib",
-                          "args": [
-                            1
-                          ],
-                          "loc": {
-                            "line": 1
-                          },
-                          "children": [],
-                          "return": 1,
-                          "error": null,
-                          "startedAt": 1790248014763,
-                          "endedAt": 1790248014763
-                        },
-                        {
-                          "id": 12,
-                          "name": "fib",
-                          "args": [
-                            0
-                          ],
-                          "loc": {
-                            "line": 1
-                          },
-                          "children": [],
-                          "return": 0,
-                          "error": null,
-                          "startedAt": 1790248014763,
-                          "endedAt": 1790248014763
-                        }
-                      ],
-                      "return": 1,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    }
-                  ],
-                  "return": 3,
+                  "children": [],
+                  "return": "moumen",
                   "error": null,
-                  "startedAt": 1790248014763,
-                  "endedAt": 1790248014763
-                },
-                {
-                  "id": 13,
-                  "name": "fib",
-                  "args": [
-                    3
-                  ],
-                  "loc": {
-                    "line": 1
-                  },
-                  "children": [
-                    {
-                      "id": 14,
-                      "name": "fib",
-                      "args": [
-                        2
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [
-                        {
-                          "id": 15,
-                          "name": "fib",
-                          "args": [
-                            1
-                          ],
-                          "loc": {
-                            "line": 1
-                          },
-                          "children": [],
-                          "return": 1,
-                          "error": null,
-                          "startedAt": 1790248014763,
-                          "endedAt": 1790248014763
-                        },
-                        {
-                          "id": 16,
-                          "name": "fib",
-                          "args": [
-                            0
-                          ],
-                          "loc": {
-                            "line": 1
-                          },
-                          "children": [],
-                          "return": 0,
-                          "error": null,
-                          "startedAt": 1790248014763,
-                          "endedAt": 1790248014763
-                        }
-                      ],
-                      "return": 1,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    },
-                    {
-                      "id": 17,
-                      "name": "fib",
-                      "args": [
-                        1
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [],
-                      "return": 1,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    }
-                  ],
-                  "return": 2,
-                  "error": null,
-                  "startedAt": 1790248014763,
-                  "endedAt": 1790248014763
+                  "startedAt": 1790269949766,
+                  "endedAt": 1790269949766
                 }
               ],
-              "return": 5,
+              "return": 252,
               "error": null,
-              "startedAt": 1790248014763,
-              "endedAt": 1790248014763
-            },
-            {
-              "id": 18,
-              "name": "fib",
-              "args": [
-                4
-              ],
-              "loc": {
-                "line": 1
-              },
-              "children": [
-                {
-                  "id": 19,
-                  "name": "fib",
-                  "args": [
-                    3
-                  ],
-                  "loc": {
-                    "line": 1
-                  },
-                  "children": [
-                    {
-                      "id": 20,
-                      "name": "fib",
-                      "args": [
-                        2
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [
-                        {
-                          "id": 21,
-                          "name": "fib",
-                          "args": [
-                            1
-                          ],
-                          "loc": {
-                            "line": 1
-                          },
-                          "children": [],
-                          "return": 1,
-                          "error": null,
-                          "startedAt": 1790248014763,
-                          "endedAt": 1790248014763
-                        },
-                        {
-                          "id": 22,
-                          "name": "fib",
-                          "args": [
-                            0
-                          ],
-                          "loc": {
-                            "line": 1
-                          },
-                          "children": [],
-                          "return": 0,
-                          "error": null,
-                          "startedAt": 1790248014763,
-                          "endedAt": 1790248014763
-                        }
-                      ],
-                      "return": 1,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    },
-                    {
-                      "id": 23,
-                      "name": "fib",
-                      "args": [
-                        1
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [],
-                      "return": 1,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    }
-                  ],
-                  "return": 2,
-                  "error": null,
-                  "startedAt": 1790248014763,
-                  "endedAt": 1790248014763
-                },
-                {
-                  "id": 24,
-                  "name": "fib",
-                  "args": [
-                    2
-                  ],
-                  "loc": {
-                    "line": 1
-                  },
-                  "children": [
-                    {
-                      "id": 25,
-                      "name": "fib",
-                      "args": [
-                        1
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [],
-                      "return": 1,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    },
-                    {
-                      "id": 26,
-                      "name": "fib",
-                      "args": [
-                        0
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [],
-                      "return": 0,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    }
-                  ],
-                  "return": 1,
-                  "error": null,
-                  "startedAt": 1790248014763,
-                  "endedAt": 1790248014763
-                }
-              ],
-              "return": 3,
-              "error": null,
-              "startedAt": 1790248014763,
-              "endedAt": 1790248014763
+              "startedAt": 1790269949766,
+              "endedAt": 1790269949766
             }
           ],
-          "return": 8,
+          "return": {
+            "name": "Moumen",
+            "id": 252
+          },
           "error": null,
-          "startedAt": 1790248014763,
-          "endedAt": 1790248014763
+          "startedAt": 1790269949766,
+          "endedAt": 1790269949766
         },
         {
-          "id": 27,
-          "name": "fib",
+          "id": 5,
+          "name": "buildMessage",
           "args": [
-            5
+            {
+              "name": "Moumen",
+              "id": 252
+            }
           ],
           "loc": {
-            "line": 1
+            "line": 25
           },
           "children": [
             {
-              "id": 28,
-              "name": "fib",
+              "id": 6,
+              "name": "createGreeting",
               "args": [
-                4
+                "Moumen"
               ],
               "loc": {
-                "line": 1
+                "line": 32
               },
-              "children": [
-                {
-                  "id": 29,
-                  "name": "fib",
-                  "args": [
-                    3
-                  ],
-                  "loc": {
-                    "line": 1
-                  },
-                  "children": [
-                    {
-                      "id": 30,
-                      "name": "fib",
-                      "args": [
-                        2
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [
-                        {
-                          "id": 31,
-                          "name": "fib",
-                          "args": [
-                            1
-                          ],
-                          "loc": {
-                            "line": 1
-                          },
-                          "children": [],
-                          "return": 1,
-                          "error": null,
-                          "startedAt": 1790248014763,
-                          "endedAt": 1790248014763
-                        },
-                        {
-                          "id": 32,
-                          "name": "fib",
-                          "args": [
-                            0
-                          ],
-                          "loc": {
-                            "line": 1
-                          },
-                          "children": [],
-                          "return": 0,
-                          "error": null,
-                          "startedAt": 1790248014763,
-                          "endedAt": 1790248014763
-                        }
-                      ],
-                      "return": 1,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    },
-                    {
-                      "id": 33,
-                      "name": "fib",
-                      "args": [
-                        1
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [],
-                      "return": 1,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    }
-                  ],
-                  "return": 2,
-                  "error": null,
-                  "startedAt": 1790248014763,
-                  "endedAt": 1790248014763
-                },
-                {
-                  "id": 34,
-                  "name": "fib",
-                  "args": [
-                    2
-                  ],
-                  "loc": {
-                    "line": 1
-                  },
-                  "children": [
-                    {
-                      "id": 35,
-                      "name": "fib",
-                      "args": [
-                        1
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [],
-                      "return": 1,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    },
-                    {
-                      "id": 36,
-                      "name": "fib",
-                      "args": [
-                        0
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [],
-                      "return": 0,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    }
-                  ],
-                  "return": 1,
-                  "error": null,
-                  "startedAt": 1790248014763,
-                  "endedAt": 1790248014763
-                }
-              ],
-              "return": 3,
+              "children": [],
+              "return": "Hello, Moumen!",
               "error": null,
-              "startedAt": 1790248014763,
-              "endedAt": 1790248014763
+              "startedAt": 1790269949767,
+              "endedAt": 1790269949767
             },
             {
-              "id": 37,
-              "name": "fib",
+              "id": 7,
+              "name": "createUserInfo",
               "args": [
-                3
-              ],
-              "loc": {
-                "line": 1
-              },
-              "children": [
                 {
-                  "id": 38,
-                  "name": "fib",
-                  "args": [
-                    2
-                  ],
-                  "loc": {
-                    "line": 1
-                  },
-                  "children": [
-                    {
-                      "id": 39,
-                      "name": "fib",
-                      "args": [
-                        1
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [],
-                      "return": 1,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    },
-                    {
-                      "id": 40,
-                      "name": "fib",
-                      "args": [
-                        0
-                      ],
-                      "loc": {
-                        "line": 1
-                      },
-                      "children": [],
-                      "return": 0,
-                      "error": null,
-                      "startedAt": 1790248014763,
-                      "endedAt": 1790248014763
-                    }
-                  ],
-                  "return": 1,
-                  "error": null,
-                  "startedAt": 1790248014763,
-                  "endedAt": 1790248014763
-                },
-                {
-                  "id": 41,
-                  "name": "fib",
-                  "args": [
-                    1
-                  ],
-                  "loc": {
-                    "line": 1
-                  },
-                  "children": [],
-                  "return": 1,
-                  "error": null,
-                  "startedAt": 1790248014763,
-                  "endedAt": 1790248014763
+                  "name": "Moumen",
+                  "id": 252
                 }
               ],
-              "return": 2,
+              "loc": {
+                "line": 36
+              },
+              "children": [],
+              "return": "Your ID is 252.",
               "error": null,
-              "startedAt": 1790248014763,
-              "endedAt": 1790248014763
+              "startedAt": 1790269949767,
+              "endedAt": 1790269949767
             }
           ],
-          "return": 5,
+          "return": "Hello, Moumen! Your ID is 252.",
           "error": null,
-          "startedAt": 1790248014763,
-          "endedAt": 1790248014763
-        }
-      ],
-      "return": 13,
-      "error": null,
-      "startedAt": 1790248014763,
-      "endedAt": 1790248014763
-    },
-    {
-      "id": 42,
-      "name": "factorial",
-      "args": [
-        5
-      ],
-      "loc": {
-        "line": 6
-      },
-      "children": [],
-      "return": 120,
-      "error": null,
-      "startedAt": 1790248014777,
-      "endedAt": 1790248014777
-    },
-    {
-      "id": 43,
-      "name": "greet",
-      "args": [
+          "startedAt": 1790269949767,
+          "endedAt": 1790269949767
+        },
         {
-          "name": "ada",
-          "tags": [
-            "math",
-            "pioneer"
-          ]
+          "id": 8,
+          "name": "processMessage",
+          "args": [
+            "Hello, Moumen! Your ID is 252."
+          ],
+          "loc": {
+            "line": 40
+          },
+          "children": [
+            {
+              "id": 9,
+              "name": "splitMessage",
+              "args": [
+                "Hello, Moumen! Your ID is 252."
+              ],
+              "loc": {
+                "line": 50
+              },
+              "children": [],
+              "return": [
+                "Hello,",
+                "Moumen!",
+                "Your",
+                "ID",
+                "is",
+                "252."
+              ],
+              "error": null,
+              "startedAt": 1790269949767,
+              "endedAt": 1790269949767
+            },
+            {
+              "id": 10,
+              "name": "countWords",
+              "args": [
+                [
+                  "Hello,",
+                  "Moumen!",
+                  "Your",
+                  "ID",
+                  "is",
+                  "252."
+                ]
+              ],
+              "loc": {
+                "line": 54
+              },
+              "children": [],
+              "return": 6,
+              "error": null,
+              "startedAt": 1790269949767,
+              "endedAt": 1790269949767
+            }
+          ],
+          "return": {
+            "message": "Hello, Moumen! Your ID is 252.",
+            "wordCount": 6
+          },
+          "error": null,
+          "startedAt": 1790269949767,
+          "endedAt": 1790269949767
         }
       ],
-      "loc": {
-        "line": 13
+      "return": {
+        "message": "Hello, Moumen! Your ID is 252.",
+        "wordCount": 6
       },
-      "children": [],
-      "return": "hi ada",
       "error": null,
-      "startedAt": 1790248014777,
-      "endedAt": 1790248014777
+      "startedAt": 1790269949766,
+      "endedAt": 1790269949767
     }
   ]
 }

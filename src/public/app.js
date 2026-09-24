@@ -36,10 +36,18 @@ export function fmt(v) {
 
 function nodeText(s) {
   return s
+    .replace(/[\r\n\t]+/g, " ") // no raw control whitespace inside an edge/node
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;")
+    .replace(/\{/g, "&#123;")
+    .replace(/\}/g, "&#125;")
+    .replace(/\[/g, "&#91;")
+    .replace(/\]/g, "&#93;")
+    .replace(/\|/g, "&#124;")
+    .replace(/\\/g, "&#92;");
 }
 
 function labelFor(frame) {
@@ -51,6 +59,22 @@ function labelFor(frame) {
     label += ` → ${fmt(frame.return)}`;
   }
   return label.slice(0, 140);
+}
+
+class MermaidError extends Error {
+  constructor(message, cause, diagram) {
+    super(message);
+    this.name = "MermaidError";
+    this.cause = cause;
+    this.diagram = diagram;
+  }
+}
+
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 export function buildGraph(roots) {
@@ -70,7 +94,8 @@ export function buildGraph(roots) {
   for (const root of roots) visit(root, null);
 
   const lines = ["flowchart TD"];
-  for (const [nid, label] of nodes) lines.push(`  ${nid}[${nodeText(label)}]`);
+  for (const [nid, label] of nodes)
+    lines.push(`  ${nid}["${nodeText(label)}"]`);
   for (const edge of edges) lines.push(`  ${edge}`);
   if (errors.size) {
     lines.push("  classDef err fill:#4c0d0d,stroke:#ef4444,color:#fca5a5;");
@@ -93,7 +118,13 @@ export function computeStats(roots) {
   return { calls, maxDepth, roots: roots.length };
 }
 
-if (typeof document !== "undefined") start();
+if (
+  typeof document !== "undefined" &&
+  document.documentElement &&
+  document.getElementById("tree")
+) {
+  start();
+}
 
 function start() {
   const wrap = document.getElementById("tree");
@@ -125,16 +156,29 @@ function start() {
         `${stats.calls} calls · depth ${stats.maxDepth} · ` +
         `${stats.roots} root${stats.roots === 1 ? "" : "s"} · ` +
         `generated ${new Date(tree.generatedAt).toLocaleTimeString()}`;
+      try {
+        await window.mermaid.parse(graph);
+      } catch (err) {
+        throw new MermaidError("mermaid rejected the generated graph", err, graph);
+      }
       const { svg } = await window.mermaid.render("cycGraph", graph);
       wrap.innerHTML = svg;
       statusEl.textContent = "live · watching for changes";
       statusEl.style.color = "#4ade80";
-    } catch {
-      wrap.innerHTML =
-        '<div id="empty">No trace yet.<br>Run <code>cyclops your-file.js</code> and this view refreshes automatically.</div>';
-      statsEl.textContent = "";
-      statusEl.textContent = "no trace yet";
-      statusEl.style.color = "#f59e0b";
+    } catch (err) {
+      statusEl.textContent = "render failed";
+      statusEl.style.color = "#f87171";
+      if (err instanceof MermaidError) {
+        wrap.innerHTML =
+          `<pre id="render-error">${nodeText(err.message)}</pre>` +
+          escapeHtml(err.diagram || "");
+      } else {
+        wrap.innerHTML =
+          '<div id="empty">No trace yet.<br>Run <code>cyclops your-file.js</code> and this view refreshes automatically.</div>';
+        statsEl.textContent = "";
+        statusEl.textContent = "no trace yet";
+        statusEl.style.color = "#f59e0b";
+      }
     }
   }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { transform } from "./transform.js";
@@ -12,36 +12,46 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = join(HERE, "server.js");
 const DEFAULT_PORT = 4600;
 
-async function serverUp(url) {
+async function probe(url) {
   try {
-    const res = await fetch(url);
-    return res.ok;
+    const res = await fetch(`${url}/whoami`);
+    if (!res.ok) return { up: true, info: null };
+    return { up: true, info: await res.json() };
   } catch {
-    return false;
+    return { up: false, info: null };
   }
 }
 
-async function ensureServer(port) {
-  const url = `http://localhost:${port}`;
-  if (await serverUp(`${url}/version`)) return url;
-  spawn(process.execPath, [SERVER_PATH, "--port", String(port)], {
-    detached: true,
-    stdio: "ignore",
-  }).unref();
-  for (let i = 0; i < 50; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    if (await serverUp(`${url}/version`)) return url;
+async function ensureServer(port, treePath) {
+  for (let p = port; p < port + 20; p++) {
+    const url = `http://localhost:${p}`;
+    const { up, info } = await probe(url);
+    if (up && info && info.treePath === treePath) return url;
+    if (up) continue;
+
+    spawn(process.execPath, [SERVER_PATH, "--port", String(p), "--tree", treePath], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      const check = await probe(url);
+      if (check.up && check.info && check.info.treePath === treePath) return url;
+    }
+    return url;
   }
-  return url;
+  return `http://localhost:${port}`;
 }
 
 function parseArgs(argv) {
   let file = null;
   let port = null;
+  let noServer = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--port") port = Number(argv[++i]);
     else if (a.startsWith("--port=")) port = Number(a.slice("--port=".length));
+    else if (a === "--no-server") noServer = true;
     else if (a === "--help" || a === "-h") return { help: true };
     else if (!a.startsWith("-")) file = a;
     else {
@@ -53,13 +63,13 @@ function parseArgs(argv) {
 }
 
 function printUsage() {
-  console.log(`usage: cyclops <file.js> [--port N]
+  console.log(`usage: cyclops <file.js> [--port N] [--no-server]
   instruments <file.js>, runs it, writes the call tree to out/tree.json,
-  and serves it at http://localhost:${DEFAULT_PORT} (default port)`);
+  and serves it at http://localhost:${DEFAULT_PORT} (default port).`);
 }
 
 async function main() {
-  const { file, port, help } = parseArgs(process.argv.slice(2));
+  const { file, port, noServer, help } = parseArgs(process.argv.slice(2));
   if (help || !file) {
     printUsage();
     process.exit(help ? 0 : 1);
@@ -113,12 +123,14 @@ async function main() {
     process.exit(res.status ?? 1);
   }
 
-  const outFile = join(process.cwd(), "out", "tree.json");
+  const outFile = resolve(process.cwd(), "out", "tree.json");
   writeTree(outFile, tree);
   console.error(`[cyclops] trace written to ${outFile}`);
 
-  const url = await ensureServer(port ?? DEFAULT_PORT);
-  console.error(`[cyclops] view the call tree at ${url}`);
+  if (!noServer) {
+    const url = await ensureServer(port ?? DEFAULT_PORT, outFile);
+    console.error(`[cyclops] view the call tree at ${url}`);
+  }
 
   process.exit(res.status ?? 0);
 }

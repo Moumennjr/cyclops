@@ -6,7 +6,15 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(here, "public");
-const TREE_FILE = () => resolve(process.cwd(), "out", "tree.json");
+
+function argValue(name) {
+  const i = process.argv.indexOf(`--${name}`);
+  return i !== -1 ? process.argv[i + 1] : null;
+}
+
+const TREE_FILE =
+  argValue("tree") || resolve(process.cwd(), "out", "tree.json");
+let LISTENING_PORT = null;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -19,10 +27,9 @@ const MIME = {
 };
 
 function readTree() {
-  const file = TREE_FILE();
-  if (!existsSync(file)) return null;
+  if (!existsSync(TREE_FILE)) return null;
   try {
-    return JSON.parse(readFileSync(file, "utf8"));
+    return JSON.parse(readFileSync(TREE_FILE, "utf8"));
   } catch {
     return null;
   }
@@ -66,13 +73,22 @@ const server = createServer((req, res) => {
     );
   }
 
+  if (pathname === "/whoami") {
+    return send(
+      res,
+      200,
+      JSON.stringify({ treePath: TREE_FILE, port: LISTENING_PORT }),
+      { "content-type": "application/json; charset=utf-8" },
+    );
+  }
+
   send(res, 404, "not found");
 });
 
 function main() {
-  const idx = process.argv.indexOf("--port");
-  const port = Number(idx !== -1 ? process.argv[idx + 1] : 4600);
+  const port = Number(argValue("port") || 4600);
   server.listen(port, () => {
+    LISTENING_PORT = port;
     console.error(`[cyclops] server http://localhost:${port}`);
   });
 }
