@@ -77,6 +77,11 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;");
 }
 
+export function fitScale(avail, intrinsic, min = 0.25, max = 3) {
+  if (!avail || !intrinsic) return 1;
+  return Math.min(max, Math.max(min, avail / intrinsic));
+}
+
 export function buildGraph(roots) {
   const nodes = [];
   const edges = [];
@@ -133,15 +138,26 @@ function start() {
   const statusEl = document.getElementById("status");
 
   let scale = 1;
+  const zoomLabel = document.getElementById("zreset");
   function applyScale() {
     wrap.style.transform = `scale(${scale})`;
-    wrap.style.transformOrigin = "0 0";
+    wrap.style.transformOrigin = "top center";
+    zoomLabel.textContent = `${Math.round(scale * 100)}%`;
   }
-  document.getElementById("zin").onclick = () => { scale = Math.min(4, scale * 1.25); applyScale(); };
+  document.getElementById("zin").onclick = () => { scale = Math.min(6, scale * 1.25); applyScale(); };
   document.getElementById("zout").onclick = () => { scale = Math.max(0.2, scale / 1.25); applyScale(); };
   document.getElementById("zreset").onclick = () => { scale = 1; applyScale(); };
 
-  window.mermaid.initialize({ startOnLoad: false, theme: "dark" });
+  function zoomToFit() {
+    const svgEl = wrap.querySelector("svg");
+    if (!svgEl) return;
+    const vb = svgEl.viewBox.baseVal;
+    const width = vb && vb.width ? vb.width : wrap.scrollWidth;
+    scale = fitScale(container.clientWidth - 48, width);
+    applyScale();
+  }
+
+  window.mermaid.initialize({ startOnLoad: false, theme: "neutral" });
 
   let lastVersion = null;
 
@@ -163,11 +179,12 @@ function start() {
       }
       const { svg } = await window.mermaid.render("cycGraph", graph);
       wrap.innerHTML = svg;
+      zoomToFit();
       statusEl.textContent = "live · watching for changes";
-      statusEl.style.color = "#4ade80";
+      statusEl.style.color = "#16a34a";
     } catch (err) {
       statusEl.textContent = "render failed";
-      statusEl.style.color = "#f87171";
+      statusEl.style.color = "#dc2626";
       if (err instanceof MermaidError) {
         wrap.innerHTML =
           `<pre id="render-error">${nodeText(err.message)}</pre>` +
@@ -177,7 +194,7 @@ function start() {
           '<div id="empty">No trace yet.<br>Run <code>cyclops your-file.js</code> and this view refreshes automatically.</div>';
         statsEl.textContent = "";
         statusEl.textContent = "no trace yet";
-        statusEl.style.color = "#f59e0b";
+        statusEl.style.color = "#b45309";
       }
     }
   }
@@ -192,7 +209,7 @@ function start() {
       }
     } catch {
       statusEl.textContent = "server unreachable";
-      statusEl.style.color = "#f87171";
+      statusEl.style.color = "#dc2626";
     }
   }
 
@@ -201,7 +218,7 @@ function start() {
   container.addEventListener("wheel", (e) => {
     if (!e.ctrlKey) return;
     e.preventDefault();
-    scale = Math.max(0.2, Math.min(4, scale * (e.deltaY < 0 ? 1.1 : 0.9)));
+    scale = Math.max(0.2, Math.min(6, scale * (e.deltaY < 0 ? 1.1 : 0.9)));
     applyScale();
   }, { passive: false });
 }

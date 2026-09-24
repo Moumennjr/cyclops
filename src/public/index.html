@@ -9,8 +9,8 @@
     html, body { height: 100%; }
     body {
       margin: 0;
-      background: #0f172a;
-      color: #e2e8f0;
+      background: #ffffff;
+      color: #1e293b;
       font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     }
     header {
@@ -18,41 +18,53 @@
       align-items: baseline;
       gap: 16px;
       padding: 12px 20px;
-      border-bottom: 1px solid #1e293b;
+      border-bottom: 1px solid #e2e8f0;
+      background: #f8fafc;
     }
     header h1 { margin: 0; font-size: 18px; letter-spacing: 0.02em; }
-    #stats { color: #94a3b8; font-size: 13px; }
-    #status { margin-left: auto; font-size: 12px; color: #64748b; }
+    #stats { color: #64748b; font-size: 13px; }
+    #status { margin-left: auto; font-size: 12px; color: #475569; }
     #controls { margin-left: 12px; display: flex; gap: 6px; }
     #controls button {
-      background: #1e293b;
-      border: 1px solid #334155;
-      color: #cbd5e1;
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+      color: #334155;
       border-radius: 6px;
       padding: 2px 10px;
       font-size: 13px;
       cursor: pointer;
     }
-    #controls button:hover { background: #334155; }
-    #treewrap { padding: 24px; overflow: auto; height: calc(100vh - 53px); }
-    #tree { min-width: 300px; min-height: 300px; display: inline-block; }
+    #controls button:hover { background: #e2e8f0; }
+    #treewrap {
+      padding: 32px 24px;
+      overflow: auto;
+      height: calc(100vh - 53px);
+      text-align: center;
+    }
+    #tree {
+      display: inline-block;
+      text-align: left;
+      min-width: 300px;
+      min-height: 300px;
+      transform-origin: top center;
+    }
     #tree svg { max-width: none; }
     #render-error {
       white-space: pre-wrap;
-      color: #fca5a5;
-      background: #1e293b;
-      border: 1px solid #7f1d1d;
+      color: #b91c1c;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
       border-radius: 8px;
       padding: 12px 16px;
       font-size: 12px;
       max-width: 900px;
     }
-    #empty { color: #94a3b8; text-align: center; padding: 80px 24px; line-height: 1.8; }
+    #empty { color: #64748b; text-align: center; padding: 80px 24px; line-height: 1.8; }
     #empty code {
-      background: #1e293b;
+      background: #f1f5f9;
       padding: 2px 6px;
       border-radius: 5px;
-      color: #7dd3fc;
+      color: #0369a1;
     }
   </style>
 </head>
@@ -63,7 +75,7 @@
     <span id="status">connecting…</span>
     <span id="controls">
       <button id="zout">−</button>
-      <button id="zreset">•</button>
+      <button id="zreset">100%</button>
       <button id="zin">+</button>
     </span>
   </header>
