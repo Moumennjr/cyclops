@@ -1,0 +1,43 @@
+{
+  "version": 1790247170245,
+  "generatedAt": "2026-09-24T10:52:50.245Z",
+  "roots": [
+    {
+      "id": 1,
+      "name": "a",
+      "args": [],
+      "loc": {
+        "line": 1
+      },
+      "children": [
+        {
+          "id": 2,
+          "name": "b",
+          "args": [],
+          "loc": {
+            "line": 2
+          },
+          "children": [],
+          "return": {
+            "type": "undefined"
+          },
+          "error": {
+            "name": "Error",
+            "message": "kaboom"
+          },
+          "startedAt": 1790247170224,
+          "endedAt": 1790247170224
+        }
+      ],
+      "return": {
+        "type": "undefined"
+      },
+      "error": {
+        "name": "Error",
+        "message": "kaboom"
+      },
+      "startedAt": 1790247170224,
+      "endedAt": 1790247170224
+    }
+  ]
+}
