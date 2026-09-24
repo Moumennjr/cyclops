@@ -1,11 +1,39 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawn, spawnSync } from "node:child_process";
 import { transform } from "./transform.js";
 import { runtimeSource } from "./runtime.js";
 import { splitTree, writeTree } from "./treeio.js";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SERVER_PATH = join(HERE, "server.js");
+const DEFAULT_PORT = 4600;
+
+async function serverUp(url) {
+  try {
+    const res = await fetch(url);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureServer(port) {
+  const url = `http://localhost:${port}`;
+  if (await serverUp(`${url}/version`)) return url;
+  spawn(process.execPath, [SERVER_PATH, "--port", String(port)], {
+    detached: true,
+    stdio: "ignore",
+  }).unref();
+  for (let i = 0; i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    if (await serverUp(`${url}/version`)) return url;
+  }
+  return url;
+}
 
 function parseArgs(argv) {
   let file = null;
@@ -26,10 +54,11 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(`usage: cyclops <file.js> [--port N]
-  instruments <file.js>, runs it, and writes the call tree to out/tree.json`);
+  instruments <file.js>, runs it, writes the call tree to out/tree.json,
+  and serves it at http://localhost:${DEFAULT_PORT} (default port)`);
 }
 
-function main() {
+async function main() {
   const { file, port, help } = parseArgs(process.argv.slice(2));
   if (help || !file) {
     printUsage();
@@ -88,7 +117,13 @@ function main() {
   writeTree(outFile, tree);
   console.error(`[cyclops] trace written to ${outFile}`);
 
+  const url = await ensureServer(port ?? DEFAULT_PORT);
+  console.error(`[cyclops] view the call tree at ${url}`);
+
   process.exit(res.status ?? 0);
 }
 
-main();
+main().catch((e) => {
+  console.error(`cyclops: ${e.message}`);
+  process.exit(1);
+});
