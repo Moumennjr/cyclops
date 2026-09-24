@@ -1,43 +1,677 @@
 {
-  "version": 1790247527237,
-  "generatedAt": "2026-09-24T10:58:47.237Z",
+  "version": 1790248014786,
+  "generatedAt": "2026-09-24T11:06:54.786Z",
   "roots": [
     {
       "id": 1,
-      "name": "a",
-      "args": [],
+      "name": "fib",
+      "args": [
+        7
+      ],
       "loc": {
         "line": 1
       },
       "children": [
         {
           "id": 2,
-          "name": "b",
-          "args": [],
+          "name": "fib",
+          "args": [
+            6
+          ],
           "loc": {
-            "line": 2
+            "line": 1
           },
-          "children": [],
-          "return": {
-            "type": "undefined"
+          "children": [
+            {
+              "id": 3,
+              "name": "fib",
+              "args": [
+                5
+              ],
+              "loc": {
+                "line": 1
+              },
+              "children": [
+                {
+                  "id": 4,
+                  "name": "fib",
+                  "args": [
+                    4
+                  ],
+                  "loc": {
+                    "line": 1
+                  },
+                  "children": [
+                    {
+                      "id": 5,
+                      "name": "fib",
+                      "args": [
+                        3
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [
+                        {
+                          "id": 6,
+                          "name": "fib",
+                          "args": [
+                            2
+                          ],
+                          "loc": {
+                            "line": 1
+                          },
+                          "children": [
+                            {
+                              "id": 7,
+                              "name": "fib",
+                              "args": [
+                                1
+                              ],
+                              "loc": {
+                                "line": 1
+                              },
+                              "children": [],
+                              "return": 1,
+                              "error": null,
+                              "startedAt": 1790248014763,
+                              "endedAt": 1790248014763
+                            },
+                            {
+                              "id": 8,
+                              "name": "fib",
+                              "args": [
+                                0
+                              ],
+                              "loc": {
+                                "line": 1
+                              },
+                              "children": [],
+                              "return": 0,
+                              "error": null,
+                              "startedAt": 1790248014763,
+                              "endedAt": 1790248014763
+                            }
+                          ],
+                          "return": 1,
+                          "error": null,
+                          "startedAt": 1790248014763,
+                          "endedAt": 1790248014763
+                        },
+                        {
+                          "id": 9,
+                          "name": "fib",
+                          "args": [
+                            1
+                          ],
+                          "loc": {
+                            "line": 1
+                          },
+                          "children": [],
+                          "return": 1,
+                          "error": null,
+                          "startedAt": 1790248014763,
+                          "endedAt": 1790248014763
+                        }
+                      ],
+                      "return": 2,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    },
+                    {
+                      "id": 10,
+                      "name": "fib",
+                      "args": [
+                        2
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [
+                        {
+                          "id": 11,
+                          "name": "fib",
+                          "args": [
+                            1
+                          ],
+                          "loc": {
+                            "line": 1
+                          },
+                          "children": [],
+                          "return": 1,
+                          "error": null,
+                          "startedAt": 1790248014763,
+                          "endedAt": 1790248014763
+                        },
+                        {
+                          "id": 12,
+                          "name": "fib",
+                          "args": [
+                            0
+                          ],
+                          "loc": {
+                            "line": 1
+                          },
+                          "children": [],
+                          "return": 0,
+                          "error": null,
+                          "startedAt": 1790248014763,
+                          "endedAt": 1790248014763
+                        }
+                      ],
+                      "return": 1,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    }
+                  ],
+                  "return": 3,
+                  "error": null,
+                  "startedAt": 1790248014763,
+                  "endedAt": 1790248014763
+                },
+                {
+                  "id": 13,
+                  "name": "fib",
+                  "args": [
+                    3
+                  ],
+                  "loc": {
+                    "line": 1
+                  },
+                  "children": [
+                    {
+                      "id": 14,
+                      "name": "fib",
+                      "args": [
+                        2
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [
+                        {
+                          "id": 15,
+                          "name": "fib",
+                          "args": [
+                            1
+                          ],
+                          "loc": {
+                            "line": 1
+                          },
+                          "children": [],
+                          "return": 1,
+                          "error": null,
+                          "startedAt": 1790248014763,
+                          "endedAt": 1790248014763
+                        },
+                        {
+                          "id": 16,
+                          "name": "fib",
+                          "args": [
+                            0
+                          ],
+                          "loc": {
+                            "line": 1
+                          },
+                          "children": [],
+                          "return": 0,
+                          "error": null,
+                          "startedAt": 1790248014763,
+                          "endedAt": 1790248014763
+                        }
+                      ],
+                      "return": 1,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    },
+                    {
+                      "id": 17,
+                      "name": "fib",
+                      "args": [
+                        1
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [],
+                      "return": 1,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    }
+                  ],
+                  "return": 2,
+                  "error": null,
+                  "startedAt": 1790248014763,
+                  "endedAt": 1790248014763
+                }
+              ],
+              "return": 5,
+              "error": null,
+              "startedAt": 1790248014763,
+              "endedAt": 1790248014763
+            },
+            {
+              "id": 18,
+              "name": "fib",
+              "args": [
+                4
+              ],
+              "loc": {
+                "line": 1
+              },
+              "children": [
+                {
+                  "id": 19,
+                  "name": "fib",
+                  "args": [
+                    3
+                  ],
+                  "loc": {
+                    "line": 1
+                  },
+                  "children": [
+                    {
+                      "id": 20,
+                      "name": "fib",
+                      "args": [
+                        2
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [
+                        {
+                          "id": 21,
+                          "name": "fib",
+                          "args": [
+                            1
+                          ],
+                          "loc": {
+                            "line": 1
+                          },
+                          "children": [],
+                          "return": 1,
+                          "error": null,
+                          "startedAt": 1790248014763,
+                          "endedAt": 1790248014763
+                        },
+                        {
+                          "id": 22,
+                          "name": "fib",
+                          "args": [
+                            0
+                          ],
+                          "loc": {
+                            "line": 1
+                          },
+                          "children": [],
+                          "return": 0,
+                          "error": null,
+                          "startedAt": 1790248014763,
+                          "endedAt": 1790248014763
+                        }
+                      ],
+                      "return": 1,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    },
+                    {
+                      "id": 23,
+                      "name": "fib",
+                      "args": [
+                        1
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [],
+                      "return": 1,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    }
+                  ],
+                  "return": 2,
+                  "error": null,
+                  "startedAt": 1790248014763,
+                  "endedAt": 1790248014763
+                },
+                {
+                  "id": 24,
+                  "name": "fib",
+                  "args": [
+                    2
+                  ],
+                  "loc": {
+                    "line": 1
+                  },
+                  "children": [
+                    {
+                      "id": 25,
+                      "name": "fib",
+                      "args": [
+                        1
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [],
+                      "return": 1,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    },
+                    {
+                      "id": 26,
+                      "name": "fib",
+                      "args": [
+                        0
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [],
+                      "return": 0,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    }
+                  ],
+                  "return": 1,
+                  "error": null,
+                  "startedAt": 1790248014763,
+                  "endedAt": 1790248014763
+                }
+              ],
+              "return": 3,
+              "error": null,
+              "startedAt": 1790248014763,
+              "endedAt": 1790248014763
+            }
+          ],
+          "return": 8,
+          "error": null,
+          "startedAt": 1790248014763,
+          "endedAt": 1790248014763
+        },
+        {
+          "id": 27,
+          "name": "fib",
+          "args": [
+            5
+          ],
+          "loc": {
+            "line": 1
           },
-          "error": {
-            "name": "Error",
-            "message": "kaboom"
-          },
-          "startedAt": 1790247527218,
-          "endedAt": 1790247527218
+          "children": [
+            {
+              "id": 28,
+              "name": "fib",
+              "args": [
+                4
+              ],
+              "loc": {
+                "line": 1
+              },
+              "children": [
+                {
+                  "id": 29,
+                  "name": "fib",
+                  "args": [
+                    3
+                  ],
+                  "loc": {
+                    "line": 1
+                  },
+                  "children": [
+                    {
+                      "id": 30,
+                      "name": "fib",
+                      "args": [
+                        2
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [
+                        {
+                          "id": 31,
+                          "name": "fib",
+                          "args": [
+                            1
+                          ],
+                          "loc": {
+                            "line": 1
+                          },
+                          "children": [],
+                          "return": 1,
+                          "error": null,
+                          "startedAt": 1790248014763,
+                          "endedAt": 1790248014763
+                        },
+                        {
+                          "id": 32,
+                          "name": "fib",
+                          "args": [
+                            0
+                          ],
+                          "loc": {
+                            "line": 1
+                          },
+                          "children": [],
+                          "return": 0,
+                          "error": null,
+                          "startedAt": 1790248014763,
+                          "endedAt": 1790248014763
+                        }
+                      ],
+                      "return": 1,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    },
+                    {
+                      "id": 33,
+                      "name": "fib",
+                      "args": [
+                        1
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [],
+                      "return": 1,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    }
+                  ],
+                  "return": 2,
+                  "error": null,
+                  "startedAt": 1790248014763,
+                  "endedAt": 1790248014763
+                },
+                {
+                  "id": 34,
+                  "name": "fib",
+                  "args": [
+                    2
+                  ],
+                  "loc": {
+                    "line": 1
+                  },
+                  "children": [
+                    {
+                      "id": 35,
+                      "name": "fib",
+                      "args": [
+                        1
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [],
+                      "return": 1,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    },
+                    {
+                      "id": 36,
+                      "name": "fib",
+                      "args": [
+                        0
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [],
+                      "return": 0,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    }
+                  ],
+                  "return": 1,
+                  "error": null,
+                  "startedAt": 1790248014763,
+                  "endedAt": 1790248014763
+                }
+              ],
+              "return": 3,
+              "error": null,
+              "startedAt": 1790248014763,
+              "endedAt": 1790248014763
+            },
+            {
+              "id": 37,
+              "name": "fib",
+              "args": [
+                3
+              ],
+              "loc": {
+                "line": 1
+              },
+              "children": [
+                {
+                  "id": 38,
+                  "name": "fib",
+                  "args": [
+                    2
+                  ],
+                  "loc": {
+                    "line": 1
+                  },
+                  "children": [
+                    {
+                      "id": 39,
+                      "name": "fib",
+                      "args": [
+                        1
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [],
+                      "return": 1,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    },
+                    {
+                      "id": 40,
+                      "name": "fib",
+                      "args": [
+                        0
+                      ],
+                      "loc": {
+                        "line": 1
+                      },
+                      "children": [],
+                      "return": 0,
+                      "error": null,
+                      "startedAt": 1790248014763,
+                      "endedAt": 1790248014763
+                    }
+                  ],
+                  "return": 1,
+                  "error": null,
+                  "startedAt": 1790248014763,
+                  "endedAt": 1790248014763
+                },
+                {
+                  "id": 41,
+                  "name": "fib",
+                  "args": [
+                    1
+                  ],
+                  "loc": {
+                    "line": 1
+                  },
+                  "children": [],
+                  "return": 1,
+                  "error": null,
+                  "startedAt": 1790248014763,
+                  "endedAt": 1790248014763
+                }
+              ],
+              "return": 2,
+              "error": null,
+              "startedAt": 1790248014763,
+              "endedAt": 1790248014763
+            }
+          ],
+          "return": 5,
+          "error": null,
+          "startedAt": 1790248014763,
+          "endedAt": 1790248014763
         }
       ],
-      "return": {
-        "type": "undefined"
+      "return": 13,
+      "error": null,
+      "startedAt": 1790248014763,
+      "endedAt": 1790248014763
+    },
+    {
+      "id": 42,
+      "name": "factorial",
+      "args": [
+        5
+      ],
+      "loc": {
+        "line": 6
       },
-      "error": {
-        "name": "Error",
-        "message": "kaboom"
+      "children": [],
+      "return": 120,
+      "error": null,
+      "startedAt": 1790248014777,
+      "endedAt": 1790248014777
+    },
+    {
+      "id": 43,
+      "name": "greet",
+      "args": [
+        {
+          "name": "ada",
+          "tags": [
+            "math",
+            "pioneer"
+          ]
+        }
+      ],
+      "loc": {
+        "line": 13
       },
-      "startedAt": 1790247527218,
-      "endedAt": 1790247527219
+      "children": [],
+      "return": "hi ada",
+      "error": null,
+      "startedAt": 1790248014777,
+      "endedAt": 1790248014777
     }
   ]
 }
