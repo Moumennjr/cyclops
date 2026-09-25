@@ -50,15 +50,63 @@ function nodeText(s) {
     .replace(/\\/g, "&#92;");
 }
 
-function labelFor(frame) {
-  const args = (frame.args || []).map(fmt).join(", ");
-  let label = `${frame.name}(${args})`;
+function frameName(frame) {
+  return String((frame && frame.name) || "?");
+}
+
+export function zipToSources(elements, edges) {
+  if (!elements || !edges || elements.length !== edges.length) return null;
+  return elements.map((el, i) => ({ el, source: edges[i] }));
+}
+
+export function detailsHtml(detail) {
+  const rows = (detail.rows || [])
+    .map(
+      (r) =>
+        `<div class="cyc-row${r.err ? " cyc-err" : ""}">` +
+        `<span class="cyc-k">${r.key}</span><span class="cyc-v">${r.value}</span>` +
+        `</div>`,
+    )
+    .join("");
+  return (
+    `<div class="cyc-card">` +
+    `<div class="cyc-head">${detail.name}` +
+    `${detail.subtree ? `<span class="cyc-sub">${detail.subtree.calls} in subtree</span>` : ""}` +
+    `</div>` +
+    `<div class="cyc-body">${rows}${detail.extra || ""}</div>` +
+    `</div>`
+  );
+}
+
+export function collapseIds(nodeId, index) {
+  return subtreeIds(nodeId, index);
+}
+
+export function hideElement(el) {
+  if (el) el.setAttribute("data-cyc-hidden", "1");
+}
+export function showElement(el) {
+  if (el) el.removeAttribute("data-cyc-hidden");
+}
+export function isHidden(el) {
+  return !!(el && el.hasAttribute("data-cyc-hidden"));
+}
+
+export function describeFrame(frame) {
+  const errors = [];
+  const rows = [];
   if (frame.error) {
-    label += ` ✗ ${frame.error.name}: ${frame.error.message}`;
+    rows.push({ key: "error", value: `${frame.error.name}: ${frame.error.message}`, err: true });
   } else {
-    label += ` → ${fmt(frame.return)}`;
+    rows.push({ key: "return", value: fmt(frame.return) });
   }
-  return label.slice(0, 140);
+  const argsFmt = fmt({ args: frame.args || [] });
+  return {
+    name: escapeHtml(frameName(frame)),
+    args: argsFmt,
+    rows,
+    error: frame.error ? `${frame.error.name}: ${frame.error.message}` : null,
+  };
 }
 
 class MermaidError extends Error {
@@ -82,7 +130,12 @@ export function fitScale(avail, intrinsic, min = 0.25, max = 3) {
   return Math.min(max, Math.max(min, avail / intrinsic));
 }
 
-export function buildGraph(roots) {
+export function nodeIdFromSvgId(id) {
+  const m = /flowchart-([A-Za-z0-9]+?)(?:-\d+)?$/.exec(id || "");
+  return m ? m[1] : null;
+}
+
+export function buildGraph(roots, byId) {
   const nodes = [];
   const edges = [];
   const errors = new Set();
@@ -90,7 +143,8 @@ export function buildGraph(roots) {
 
   function visit(frame, parentId) {
     const nid = `n${++id}`;
-    nodes.push([nid, labelFor(frame)]);
+    nodes.push([nid, nodeText(frame.name)]);
+    if (byId) byId.set(nid, frame);
     if (parentId) edges.push(`${parentId} --> ${nid}`);
     if (frame.error) errors.add(nid);
     for (const child of frame.children || []) visit(child, nid);
@@ -100,13 +154,50 @@ export function buildGraph(roots) {
 
   const lines = ["flowchart TD"];
   for (const [nid, label] of nodes)
-    lines.push(`  ${nid}["${nodeText(label)}"]`);
+    lines.push(`  ${nid}["${label}"]`);
   for (const edge of edges) lines.push(`  ${edge}`);
   if (errors.size) {
-    lines.push("  classDef err fill:#4c0d0d,stroke:#ef4444,color:#fca5a5;");
+    lines.push("  classDef err fill:#fecaca,stroke:#dc2626,color:#7f1d1d;");
     lines.push(`  class ${[...errors].join(",")} err;`);
   }
   return lines.join("\n");
+}
+
+export function buildTreeIndex(edges) {
+  const parent = new Map();
+  const children = new Map();
+  const attach = (from, to) => {
+    if (!children.has(from)) children.set(from, []);
+    children.get(from).push(to);
+    parent.set(to, from);
+  };
+  for (const e of edges) {
+    const [from, to] = e.split(" --> ");
+    attach(from, to);
+  }
+  return { parent, children };
+}
+
+export function subtreeIds(nodeId, index) {
+  const seen = new Set();
+  const todo = [...(index.children.get(nodeId) || [])];
+  while (todo.length) {
+    const cur = todo.pop();
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    todo.push(...(index.children.get(cur) || []));
+  }
+  return seen;
+}
+
+export function edgesBySource(edges, index) {
+  const map = new Map();
+  for (const from of index.children.keys()) map.set(from, []);
+  for (const e of edges) {
+    const from = e.split(" --> ")[0];
+    map.set(from, [...(map.has(from) ? map.get(from) : []), e]);
+  }
+  return map;
 }
 
 export function computeStats(roots) {
@@ -121,6 +212,112 @@ export function computeStats(roots) {
   }
   walk(roots, 1);
   return { calls, maxDepth, roots: roots.length };
+}
+
+export function toFlowModel(roots, layout) {
+  const nodes = [];
+  const edges = [];
+  const byId = new Map();
+  let id = 0;
+  const ctr = layout === null ? null : { sib: new Map(), depth: new Map() };
+  function visit(frames, parentNid, d) {
+    let sib = 0;
+    for (const f of frames) {
+      const nid = `n${++id}`;
+      byId.set(nid, f);
+      let px, py;
+      if (ctr) {
+        ctr.depth.set(nid, d);
+        px = layout.x(d, sib);
+        py = layout.y(d, sib);
+      } else {
+        px = sib * 210;
+        py = d * 150;
+      }
+      nodes.push({ id: nid, position: { x: px, y: py }, data: { name: String(f.name || ""), error: !!f.error, frame: f, nid } });
+      if (parentNid) edges.push({ id: `${parentNid}-${nid}`, source: parentNid, target: nid });
+      visit(f.children || [], nid, d + 1);
+      sib++;
+    }
+  }
+  visit(roots, null, 0);
+  return { nodes, edges, byId };
+}
+
+function wireInteractions(wrap, byId, roots) {
+  try {
+    const byFrame = new Map();
+    for (const [nid, fr] of byId) byFrame.set(fr, nid);
+    const nidOf = (fr) => byFrame.get(fr) || "";
+    const edgeStrings = edgesFromFrames(roots, nidOf);
+    const index = buildTreeIndex(edgeStrings);
+    const nodeEls = [...wrap.querySelectorAll("g.node")];
+    const nodeIds = nodeEls.map((el) => nodeIdFromSvgId(el.id) || "");
+    const edgeEls = [...wrap.querySelectorAll("g.edgePath")];
+    const edgeIds = edgeEls.map((el) => nodeIdFromSvgId(el.id || "") || "");
+    const card = document.createElement("div");
+    card.className = "cyc-infocard";
+    wrap.appendChild(card);
+    const hide = () => { card.hidden = true; card.textContent = ""; };
+    hide();
+    const pos = (el) => {
+      const r = el.getBoundingClientRect();
+      const wr = wrap.getBoundingClientRect();
+      card.style.left = `${r.left - wr.left}px`;
+      card.style.top = `${r.bottom - wr.top + 8}px`;
+    };
+    nodeEls.forEach((el, i) => {
+      const nid = nodeIds[i];
+      const frame = byId.get(nid);
+      if (!frame) return;
+      const sub = subtreeIds(nid, index);
+      el.style.cursor = "pointer";
+      el.title = `${frame.name} — click to inspect/collapse`;
+      el.onclick = (ev) => {
+        ev.stopPropagation();
+        pos(el);
+        const d = describeFrame(frame);
+        const rows = (d.rows || [])
+          .map((r) => `<div class="cyc-row${r.err ? " cyc-err" : ""}"><b>${r.key}</b> ${r.value}</div>`)
+          .join("");
+        card.hidden = false;
+        card.innerHTML =
+          `<div class="cyc-name">${d.name}</div>` +
+          rows +
+          (sub.size > 1
+            ? `<button class="cyc-btn" data-act="toggle">collapse subtree (${sub.size})</button>`
+            : "") +
+          `<button class="cyc-btn" data-act="close">✕</button>`;
+        card.querySelector('[data-act="close"]').onclick = hide;
+        const tg = card.querySelector('[data-act="toggle"]');
+        if (tg) {
+          let folded = false;
+          tg.onclick = () => {
+            folded = !folded;
+            const showAll = edgesBySource(edgeStrings, index);
+            const collapsed = new Set(sub);
+            nodeEls.forEach((ne, j) => {
+              const hidden = folded && j !== i && collapsed.has(nodeIds[j]);
+              ne.style.display = hidden ? "none" : "";
+            });
+            const src = showAll.get(nid) || [];
+            edgeEls.forEach((ee, j) => {
+              const hid =
+                folded &&
+                (collapsed.has(edgeIds[j]) || src.indexOf(edgeIds[j]) !== -1);
+              ee.style.display = hid ? "none" : "";
+            });
+            tg.textContent = folded
+              ? `expand subtree (${sub.size})`
+              : `collapse subtree (${sub.size})`;
+          };
+        }
+      };
+    });
+    wrap.onclick = () => hide();
+  } catch {
+    // interaction layer is best-effort; never break rendering
+  }
 }
 
 if (
@@ -166,7 +363,8 @@ function start() {
       const res = await fetch("/tree.json");
       if (!res.ok) throw new Error("no trace yet");
       const tree = await res.json();
-      const graph = buildGraph(tree.roots || []);
+      const byId = new Map();
+      const graph = buildGraph(tree.roots || [], byId);
       const stats = computeStats(tree.roots || []);
       statsEl.textContent =
         `${stats.calls} calls · depth ${stats.maxDepth} · ` +
@@ -179,6 +377,7 @@ function start() {
       }
       const { svg } = await window.mermaid.render("cycGraph", graph);
       wrap.innerHTML = svg;
+      wireInteractions(wrap, byId, tree.roots || []);
       zoomToFit();
       statusEl.textContent = "live · watching for changes";
       statusEl.style.color = "#16a34a";

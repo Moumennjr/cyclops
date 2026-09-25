@@ -16,7 +16,7 @@ import { createServer as netServer } from "node:net";
 import { transform } from "../src/transform.js";
 import { runtimeSource, CYC_MARKER } from "../src/runtime.js";
 import { splitTree, writeTree } from "../src/treeio.js";
-import { buildGraph, computeStats, fmt } from "../src/public/app.js";
+import { buildGraph, computeStats, fitScale, fmt } from "../src/public/app.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "src", "cli.js");
@@ -113,7 +113,7 @@ test("writeTree stamps version and generatedAt", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("buildGraph emits nodes, edges, and error styling", () => {
+test("buildGraph emits nodes, name-only labels, and error styling", () => {
   const roots = [
     {
       name: "a",
@@ -134,20 +134,19 @@ test("buildGraph emits nodes, edges, and error styling", () => {
   const graph = buildGraph(roots);
   assert.match(graph, /^flowchart TD/);
   assert.match(graph, /n1 --> n2/);
-  assert.match(graph, /✗ Error: boom/);
   assert.match(graph, /class n2 err;/);
 });
 
-test("buildGraph escapes mermaid syntax characters in labels", () => {
+test("buildGraph escapes mermaid syntax characters inside name labels", () => {
   const roots = [
     {
-      name: "obj",
+      name: "obj{a}[read]",
       args: [{ a: 1 }],
       return: { message: "hi", wordCount: 2 },
       error: null,
       children: [
         {
-          name: "spl",
+          name: "spl|w[A]\\q",
           args: [],
           return: ["x", "y"],
           error: { name: "TypeError", message: "not <a> [fn]" },
@@ -278,6 +277,16 @@ test("computeStats aggregates call counts and depth", () => {
   assert.equal(stats.calls, 2);
   assert.equal(stats.maxDepth, 2);
   assert.equal(stats.roots, 1);
+});
+
+test("fitScale zooms small diagrams in and wide diagrams out, clamped and guarded", () => {
+  assert.equal(fitScale(1200, 300), 3, "small diagram scales up, capped at 3x");
+  assert.equal(fitScale(1200, 1800), 1200 / 1800, "wide diagram scales down to fit");
+  assert.equal(fitScale(1200, 10000), 0.25, "very wide hits the floor");
+  assert.equal(fitScale(1200, 400), 3, "medium diagram caps at 3x");
+  assert.equal(fitScale(0, 500), 1, "no room defaults to 1");
+  assert.equal(fitScale(1200, 0), 1, "no intrinsic width defaults to 1");
+  assert.equal(fitScale(0, 0), 1);
 });
 
 test("server serves the tree file passed via --tree and advertises it in /whoami", async () => {

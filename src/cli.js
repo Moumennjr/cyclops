@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,45 @@ import { splitTree, writeTree } from "./treeio.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = join(HERE, "server.js");
 const DEFAULT_PORT = 4600;
+const VITE_ROOT = join(HERE, "..");
+
+function urlPreview(url) {
+  return String(url || "").replace(/\/$/, "");
+}
+
+function viteBin() {
+  const rel = join(VITE_ROOT, "node_modules", "vite", "bin", "vite.js");
+  try {
+    return existsSync(rel) ? rel : null;
+  } catch {
+    return null;
+  }
+}
+
+async function startViewer(url, { open = false, vite = true } = {}) {
+  if (!vite) return false;
+  if (!process.stderr.isTTY) return false;
+  const bin = viteBin();
+  if (!bin) return false樑;
+  const child = spawn(
+    process.execPath,
+    [bin, "--config", join(VITE_ROOT, "vite.config.mjs")],
+    {
+      cwd: VITE_ROOT,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        CYCLOPS_DATA_PORT: String(new URL(url).port || DEFAULT_PORT),
+        CYCLOPS_OPEN: open ? "1" : "0",
+      },
+    },
+  );
+  await new Promise((resolve) => {
+    child.on("exit", resolve);
+    child.on("error", resolve);
+  });
+  return true;
+}
 
 async function probe(url) {
   try {
@@ -22,6 +61,31 @@ async function probe(url) {
   }
 }
 
+// the data server is a child of this CLI, not a detached daemon: when we stop
+// (exit, Ctrl+C, terminal close) it stops too, so port 4600 can never leak.
+let spawnedServer = null;
+
+function reapServer() {
+  if (!spawnedServer || spawnedServer.exitCode !== null) return;
+  try {
+    spawnedServer.kill("SIGKILL");
+  } catch {}
+}
+
+process.on("exit", reapServer);
+process.on("SIGINT", () => {
+  reapServer();
+  process.exit(130);
+});
+process.on("SIGTERM", () => {
+  reapServer();
+  process.exit(143);
+});
+process.on("SIGHUP", () => {
+  reapServer();
+  process.exit(129);
+});
+
 async function ensureServer(port, treePath) {
   for (let p = port; p < port + 20; p++) {
     const url = `http://localhost:${p}`;
@@ -29,10 +93,11 @@ async function ensureServer(port, treePath) {
     if (up && info && info.treePath === treePath) return url;
     if (up) continue;
 
-    spawn(process.execPath, [SERVER_PATH, "--port", String(p), "--tree", treePath], {
-      detached: true,
-      stdio: "ignore",
-    }).unref();
+    spawnedServer = spawn(
+      process.execPath,
+      [SERVER_PATH, "--port", String(p), "--tree", treePath],
+      { stdio: "ignore" },
+    );
     for (let i = 0; i < 50; i++) {
       await new Promise((r) => setTimeout(r, 100));
       const check = await probe(url);
@@ -47,19 +112,24 @@ function parseArgs(argv) {
   let file = null;
   let port = null;
   let noServer = false;
+  let noVite = false;
+  let noOpen = false;
+  let help = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--port") port = Number(argv[++i]);
     else if (a.startsWith("--port=")) port = Number(a.slice("--port=".length));
     else if (a === "--no-server") noServer = true;
-    else if (a === "--help" || a === "-h") return { help: true };
+    else if (a === "--no-vite") noVite = true;
+    else if (a === "--no-open") noOpen = true;
+    else if (a === "--help" || a === "-h") { help = true; continue; }
     else if (!a.startsWith("-")) file = a;
     else {
       console.error(`unknown argument: ${a}`);
       process.exit(1);
     }
   }
-  return { file, port };
+  return {file, port, noServer, noVite, noOpen, help};
 }
 
 function printUsage() {
@@ -69,7 +139,7 @@ function printUsage() {
 }
 
 async function main() {
-  const { file, port, noServer, help } = parseArgs(process.argv.slice(2));
+  const {file, port, noServer, noVite, noOpen, help} = parseArgs(process.argv.slice(2));
   if (help || !file) {
     printUsage();
     process.exit(help ? 0 : 1);
@@ -130,6 +200,11 @@ async function main() {
   if (!noServer) {
     const url = await ensureServer(port ?? DEFAULT_PORT, outFile);
     console.error(`[cyclops] view the call tree at ${url}`);
+    const viewerRan = await startViewer(urlPreview(url), { open: !noOpen, vite: !noVite });
+    if (!viewerRan && spawnedServer && spawnedServer.exitCode === null && process.stderr.isTTY) {
+      console.error("[cyclops] serving this tree until Ctrl+C ...");
+      await new Promise((done) => spawnedServer.once("exit", done));
+    }
   }
 
   process.exit(res.status ?? 0);
