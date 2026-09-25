@@ -30,7 +30,7 @@ async function startViewer(url, { open = false, vite = true } = {}) {
   if (!vite) return false;
   if (!process.stderr.isTTY) return false;
   const bin = viteBin();
-  if (!bin) return false樑;
+  if (!bin) return false;
   const child = spawn(
     process.execPath,
     [bin, "--config", join(VITE_ROOT, "vite.config.mjs")],
@@ -44,6 +44,7 @@ async function startViewer(url, { open = false, vite = true } = {}) {
       },
     },
   );
+  viteChild = child;
   await new Promise((resolve) => {
     child.on("exit", resolve);
     child.on("error", resolve);
@@ -61,15 +62,18 @@ async function probe(url) {
   }
 }
 
-// the data server is a child of this CLI, not a detached daemon: when we stop
-// (exit, Ctrl+C, terminal close) it stops too, so port 4600 can never leak.
+// children of this CLI (data server, viewer) are reaped whenever we stop:
+// exit, Ctrl+C, terminal close — so no process or port can ever leak.
 let spawnedServer = null;
+let viteChild = null;
 
 function reapServer() {
-  if (!spawnedServer || spawnedServer.exitCode !== null) return;
-  try {
-    spawnedServer.kill("SIGKILL");
-  } catch {}
+  for (const child of [spawnedServer, viteChild]) {
+    if (!child || child.exitCode !== null) continue;
+    try {
+      child.kill("SIGKILL");
+    } catch {}
+  }
 }
 
 process.on("exit", reapServer);
