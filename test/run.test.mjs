@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   rmSync,
   existsSync,
+  mkdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,7 +17,16 @@ import { createServer as netServer } from "node:net";
 import { transform } from "../src/transform.js";
 import { runtimeSource, CYC_MARKER } from "../src/runtime.js";
 import { splitTree, writeTree } from "../src/treeio.js";
-import { buildGraph, computeStats, fitScale, fmt } from "../src/public/app.js";
+import {
+  computeStats,
+  fmt,
+  describeFrame,
+  toFlowModel,
+  buildTreeIndex,
+  subtreeIds,
+  edgesBySource,
+} from "../src/public/flow-model.js";
+import { startServer } from "../src/server.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "src", "cli.js");
@@ -113,96 +123,6 @@ test("writeTree stamps version and generatedAt", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("buildGraph emits nodes, name-only labels, and error styling", () => {
-  const roots = [
-    {
-      name: "a",
-      args: ["x"],
-      return: 1,
-      error: null,
-      children: [
-        {
-          name: "b",
-          args: [],
-          return: { type: "undefined" },
-          error: { name: "Error", message: "boom" },
-          children: [],
-        },
-      ],
-    },
-  ];
-  const graph = buildGraph(roots);
-  assert.match(graph, /^flowchart TD/);
-  assert.match(graph, /n1 --> n2/);
-  assert.match(graph, /class n2 err;/);
-});
-
-test("buildGraph escapes mermaid syntax characters inside name labels", () => {
-  const roots = [
-    {
-      name: "obj{a}[read]",
-      args: [{ a: 1 }],
-      return: { message: "hi", wordCount: 2 },
-      error: null,
-      children: [
-        {
-          name: "spl|w[A]\\q",
-          args: [],
-          return: ["x", "y"],
-          error: { name: "TypeError", message: "not <a> [fn]" },
-          children: [],
-        },
-      ],
-    },
-  ];
-  const graph = buildGraph(roots);
-  const labels = graph.split("\n").filter((l) => /n\d/.test(l));
-  for (const line of labels) {
-    const body = line.slice(line.indexOf('["') + 2, line.lastIndexOf('"]'));
-    assert.ok(
-      !/[\[\]{}]/.test(body),
-      `label must not contain raw mermaid syntax: ${line}`,
-    );
-    assert.ok(!/["|]/.test(body), `label must escape quotes/pipes: ${line}`);
-  }
-  assert.match(graph, /&#123;|&#91;/, "special chars should be entity-encoded");
-});
-
-test("mermaid parser accepts generated graphs (real parser, jsdom)", async () => {
-  const { JSDOM } = await import("jsdom");
-  const dom = new JSDOM("<!doctype html><html><body></body></html>");
-  global.window = dom.window;
-  global.document = dom.window.document;
-  Object.defineProperty(globalThis, "navigator", {
-    value: dom.window.navigator,
-    configurable: true,
-  });
-  const mermaid = (await import("mermaid")).default;
-  mermaid.initialize({ startOnLoad: false });
-
-  const { tree } = runCli(join(HERE, "fixtures", "nested.js"));
-  await mermaid.parse(buildGraph(tree.roots));
-
-  const harsh = [
-    {
-      name: "a[name]{b}|p\\q",
-      args: [{ a: "v" }, [1, { x: "y" }], "new\nline&<html>\"q\""],
-      return: "{ok} [yes]",
-      error: null,
-      children: [
-        {
-          name: "err[fn]",
-          args: [],
-          return: { type: "undefined" },
-          error: { name: "TypeError", message: "x is not <a function>" },
-          children: [],
-        },
-      ],
-    },
-  ];
-  await mermaid.parse(buildGraph(harsh));
-});
-
 test("fmt renders tagged snapshots readably", () => {
   assert.equal(fmt({ type: "circular" }), "[Circular]");
   assert.equal(fmt({ type: "function", name: "go" }), "fn go");
@@ -279,14 +199,65 @@ test("computeStats aggregates call counts and depth", () => {
   assert.equal(stats.roots, 1);
 });
 
-test("fitScale zooms small diagrams in and wide diagrams out, clamped and guarded", () => {
-  assert.equal(fitScale(1200, 300), 3, "small diagram scales up, capped at 3x");
-  assert.equal(fitScale(1200, 1800), 1200 / 1800, "wide diagram scales down to fit");
-  assert.equal(fitScale(1200, 10000), 0.25, "very wide hits the floor");
-  assert.equal(fitScale(1200, 400), 3, "medium diagram caps at 3x");
-  assert.equal(fitScale(0, 500), 1, "no room defaults to 1");
-  assert.equal(fitScale(1200, 0), 1, "no intrinsic width defaults to 1");
-  assert.equal(fitScale(0, 0), 1);
+test("toFlowModel emits nodes in call order, parent before child", () => {
+  const roots = [
+    {
+      name: "a",
+      args: [],
+      return: 1,
+      error: null,
+      children: [
+        { name: "a1", args: [], return: 1, error: null, children: [
+          { name: "a2", args: [], return: 2, error: null, children: [] },
+        ] },
+        { name: "a3", args: [], return: 3, error: null, children: [] },
+      ],
+    },
+    { name: "b", args: [], return: 4, error: null, children: [] },
+  ];
+  const { nodes, edges, byId } = toFlowModel(roots, null);
+  const order = nodes.map((n) => n.data.name);
+  assert.deepEqual(order, ["a", "a1", "a2", "a3", "b"], "pre-order DFS = real call order");
+  assert.equal(nodes.length, 5);
+  assert.equal(edges.length, 3, "one edge per non-root frame");
+  for (const e of edges) {
+    const src = Number(e.source.slice(1));
+    const tgt = Number(e.target.slice(1));
+    assert.ok(src < tgt, `edge ${e.id} must go from earlier to later frame`);
+  }
+  assert.equal(byId.get("n3").name, "a2");
+  assert.equal(nodes[0].data.error, false);
+});
+
+test("describeFrame reports return values, args, and errors", () => {
+  const ok = describeFrame({ name: "f", args: [1, "x"], return: 42, error: null });
+  assert.equal(ok.name, "f");
+  assert.equal(ok.error, null);
+  assert.equal(ok.rows[0].key, "return");
+  assert.equal(ok.rows[0].value, "42");
+
+  const bad = describeFrame({ name: "g", args: [], error: { name: "TypeError", message: "nope" } });
+  assert.equal(bad.error, "TypeError: nope");
+  assert.equal(bad.rows[0].key, "error");
+  assert.equal(bad.rows[0].err, true);
+
+  const esc = describeFrame({ name: "a<b>&c", args: [], return: 1, error: null });
+  assert.equal(esc.name, "a&lt;b&gt;&amp;c", "names are html-escaped");
+});
+
+test("reveal gating: subtree walk and outgoing edges by source", () => {
+  const edges = ["n1 --> n2", "n1 --> n3", "n2 --> n4"];
+  const index = buildTreeIndex(edges);
+  assert.deepEqual([...index.children.get("n1")], ["n2", "n3"]);
+  assert.equal(index.parent.get("n4"), "n2");
+
+  assert.deepEqual([...subtreeIds("n2", index)], ["n4"], "descendants, not self");
+  assert.equal(subtreeIds("n3", index).size, 0, "leaf has no subtree");
+
+  const bySrc = edgesBySource(edges, index);
+  assert.deepEqual(bySrc.get("n1"), ["n1 --> n2", "n1 --> n3"]);
+  assert.deepEqual(bySrc.get("n2"), ["n2 --> n4"]);
+  assert.equal(bySrc.get("n3"), undefined, "no outgoing edges, no bucket");
 });
 
 test("server serves the tree file passed via --tree and advertises it in /whoami", async () => {
@@ -312,6 +283,62 @@ test("server serves the tree file passed via --tree and advertises it in /whoami
     assert.equal(typeof version.version, "number");
   } finally {
     child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("startServer serves the built viewer and 503s with instructions when missing", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cyc-www-"));
+  try {
+    const distDir = join(dir, "dist");
+    mkdirSync(join(distDir, "assets"), { recursive: true });
+    writeFileSync(
+      join(distDir, "index.html"),
+      '<!doctype html><html><body><script type="module" src="/assets/app.js"></script></body></html>',
+    );
+    writeFileSync(join(distDir, "assets", "app.js"), "console.log(1)");
+    const treeFile = join(dir, "tree.json");
+    writeTree(treeFile, { roots: [{ name: "z" }] });
+
+    const started = await startServer({ port: await getFreePort(), treePath: treeFile, distDir });
+    try {
+      const page = await fetch(`${started.url}/`);
+      assert.equal(page.status, 200);
+      assert.match(page.headers.get("content-type"), /text\/html/);
+      assert.match(await page.text(), /\/assets\/app\.js/);
+
+      const asset = await fetch(`${started.url}/assets/app.js`);
+      assert.equal(asset.status, 200);
+      assert.match(asset.headers.get("content-type"), /javascript/);
+
+      assert.equal((await fetch(`${started.url}/vite.html`)).status, 200, "old links keep working");
+
+      const info = await (await fetch(`${started.url}/whoami`)).json();
+      assert.equal(info.treePath, treeFile);
+      assert.equal(info.port, started.port);
+
+      const tree = await (await fetch(`${started.url}/tree.json`)).json();
+      assert.equal(tree.roots[0].name, "z");
+    } finally {
+      await started.close();
+    }
+
+    // no dist/ at all: trace endpoints still work, the page explains how to build
+    const bare = await startServer({
+      port: await getFreePort(),
+      treePath: treeFile,
+      distDir: join(dir, "missing"),
+    });
+    try {
+      const page = await fetch(`${bare.url}/`);
+      assert.equal(page.status, 503);
+      assert.match(await page.text(), /npm run build/);
+      assert.equal((await fetch(`${bare.url}/tree.json`)).status, 200);
+      assert.equal((await fetch(`${bare.url}/assets/app.js`)).status, 404);
+    } finally {
+      await bare.close();
+    }
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

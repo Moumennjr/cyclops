@@ -18,7 +18,7 @@ import {
   subtreeIds,
   edgesBySource,
   computeStats,
-} from "./app.js";
+} from "./flow-model.js";
 
 const NODE_W = 170;
 const SPEEDS = [
