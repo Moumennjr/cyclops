@@ -157,7 +157,7 @@ export default function CallTree() {
     const revealed = new Set(rn.map((n) => n.id));
     const re = filtered.edges
       .filter((e) => revealed.has(e.source) && revealed.has(e.target))
-      .map((e) => ({ ...e, animated: e.target === activeId }));
+      .map((e) => ({ ...e, animated: true }));
     return { nodes: rn, edges: re };
   }, [filtered, shown, activeId]);
 
