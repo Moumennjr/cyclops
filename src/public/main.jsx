@@ -58,10 +58,7 @@ export default function CallTree() {
           `${st.roots} root${st.roots === 1 ? "" : "s"} \u00b7 ` +
           `generated ${new Date(tree.generatedAt).toLocaleTimeString()}`,
       );
-      const flow = toFlowModel(roots, {
-        x: (d) => d * 130,
-        y: (d, row) => row * 90,
-      });
+      const flow = toFlowModel(roots, { level: 160 });
       setNodes(
         flow.nodes.map((n) => ({
           ...n,
@@ -69,7 +66,7 @@ export default function CallTree() {
         })),
       );
       setEdges(
-        flow.edges.map((e) => ({ ...e, id: e.id || `${e.source}-${e.target}`, type: "smoothstep" })),
+        flow.edges.map((e) => ({ ...e, id: e.id || `${e.source}-${e.target}`, type: "default" })),
       );
       setFrameCount(flow.nodes.length);
       setTreeKey(String(tree.version || tree.generatedAt || ""));

@@ -156,23 +156,52 @@ export function toFlowModel(roots, layout) {
   const edges = [];
   const byId = new Map();
   let id = 0;
-  const ctr = layout === null ? null : { sib: new Map(), depth: new Map() };
+
+  // tidy top-down placement: every leaf owns a column, parents centre over
+  // their children, so subtrees stay disjoint and branches never collide
+  const pos = new Map();
   let row = 0;
+  if (layout !== null) {
+    let maxLen = 0;
+    const measure = (frames) => {
+      for (const f of frames) {
+        maxLen = Math.max(maxLen, String(f.name || "").length);
+        measure(f.children || []);
+      }
+    };
+    measure(roots);
+    const width = layout.width ?? Math.max(170, maxLen * 8 + 28);
+    const slot = layout.slot ?? width + 44;
+    const level = layout.level ?? 160;
+    let cursor = 0;
+    const assign = (frames, d) => {
+      const centres = [];
+      for (const f of frames) {
+        const kids = f.children || [];
+        let cx;
+        if (kids.length) {
+          const ks = assign(kids, d + 1);
+          cx = (ks[0] + ks[ks.length - 1]) / 2;
+        } else {
+          cx = cursor + slot / 2;
+          cursor += slot;
+        }
+        pos.set(f, { x: cx - width / 2, y: d * level });
+        centres.push(cx);
+      }
+      return centres;
+    };
+    assign(roots, 0);
+  }
+
   function visit(frames, parentNid, d) {
     for (const f of frames) {
       const nid = `n${++id}`;
       byId.set(nid, f);
-      let px, py;
-      if (ctr) {
-        ctr.depth.set(nid, d);
-        px = layout.x(d, row);
-        py = layout.y(d, row);
-        row++;
-      } else {
-        px = row * 210;
-        py = d * 150;
-        row++;
-      }
+      const p = pos.get(f);
+      const px = p ? p.x : row * 210;
+      const py = p ? p.y : d * 150;
+      if (!p) row++;
       nodes.push({ id: nid, position: { x: px, y: py }, data: { name: String(f.name || ""), error: !!f.error, frame: f, nid } });
       if (parentNid) edges.push({ id: `${parentNid}-${nid}`, source: parentNid, target: nid });
       visit(f.children || [], nid, d + 1);
