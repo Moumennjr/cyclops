@@ -43,7 +43,6 @@ export default function CallTree() {
   const [speedIdx, setSpeedIdx] = useState(1);
   const [frameCount, setFrameCount] = useState(0);
   const [follow, setFollow] = useState(true);
-  const [selected, setSelected] = useState(null);
   const [ended, setEnded] = useState(false);
   const userTouched = useRef(false);
 
@@ -112,10 +111,14 @@ export default function CallTree() {
       }
       const frame = node.data && node.data.frame;
       if (!frame) return;
-      const d = describeFrame(frame);
-      setInfo({ nid: key, detail: d, frame });
+      // clicking the open node again dismisses the card
+      if (info && info.nid === key) {
+        setInfo(null);
+        return;
+      }
+      setInfo({ nid: key, detail: describeFrame(frame), frame });
     },
-    [collapsed],
+    [collapsed, info],
   );
 
   // nodes still visible after collapsing subtrees
@@ -252,9 +255,9 @@ export default function CallTree() {
           </span>
           <span className="cyc-stats">{stats || status}</span>
         </div>
-        {selected && (
-          <div className="react-flow__panel top-right" style={{ zIndex: 20 }}>
-            <FlowDetail detail={info && info.detail} frame={info && info.frame} nid={info && info.nid} onExpand={onExpand} />
+        {info && (
+          <div className="react-flow__panel top right" style={{ zIndex: 20 }}>
+            <FlowDetail detail={info.detail} nid={info.nid} onExpand={onExpand} />
           </div>
         )}
       </ReactFlow>
@@ -291,25 +294,33 @@ function CameraRig({ follow, shown, total, activeId }) {
   return null;
 }
 
-function FlowDetail({ detail, frame, nid, onExpand }) {
-  if (!detail)
-    return (
-      <div className="cyc-card">
-        <em>Select a node to inspect.</em>
-      </div>
-    );
-  const rows = (detail.rows || [])
-    .map(
-      (r) =>
-        `<div class="cyc-row${r.err ? " cyc-err" : ""}"><b>${r.key}</b> ${r.value}</div>`,
-    )
-    .join("");
+function FlowDetail({ detail, nid, onExpand }) {
+  if (!detail) return null;
+  const argRows = detail.argRows || [];
+  const outKey = (detail.rows[0] && detail.rows[0].key) || "return";
   return (
-    <div className="cyc-card" style={{ minWidth: 260 }}>
+    <div className="cyc-card">
       <div className="cyc-name">{detail.name}</div>
-      <div dangerouslySetInnerHTML={{ __html: rows }} />
+      <div className="cyc-sec">args</div>
+      {argRows.length === 0 ? (
+        <div className="cyc-row cyc-empty">(none)</div>
+      ) : (
+        argRows.map((a) => (
+          <div className="cyc-row" key={`arg-${a.key}`}>
+            <span className="cyc-k">{a.key}</span>
+            <span className="cyc-v">{a.value}</span>
+            <span className="cyc-type">{a.type}</span>
+          </div>
+        ))
+      )}
+      <div className="cyc-sec">{outKey}</div>
+      {detail.rows.map((r) => (
+        <div className={`cyc-row${r.err ? " cyc-err" : ""}`} key={r.key}>
+          <span className="cyc-v">{r.value}</span>
+          <span className="cyc-type">{r.type}</span>
+        </div>
+      ))}
       <div className="cyc-card-actions">
-        {detail.error ? <div className="cyc-err-tag">✗ {detail.error}</div> : null}
         <button onClick={() => onExpand && onExpand(nid)}>collapse subtree</button>
       </div>
     </div>

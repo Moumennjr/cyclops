@@ -45,18 +45,56 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;");
 }
 
+// JS-ish type name for a traced value, incl. the serializer's {type} tags
+export function valueType(v) {
+  if (v === null) return "null";
+  if (v === undefined) return "undefined";
+  if (Array.isArray(v)) return "array";
+  if (typeof v === "object") {
+    if (v.type) {
+      switch (v.type) {
+        case "undefined": return "undefined";
+        case "bigint": return "bigint";
+        case "symbol": return "symbol";
+        case "date": return "Date";
+        case "regexp": return "RegExp";
+        case "function": return "function";
+        case "string": return "string";
+        case "number": return "number";
+        case "boolean": return "boolean";
+        case "circular": return "object";
+        case "truncated": return v.ctor ? String(v.ctor) : "object";
+        case "error": return "Error";
+        case "…": return "array";
+        default: return v.type;
+      }
+    }
+    return "object";
+  }
+  return typeof v;
+}
+
 export function describeFrame(frame) {
-  const errors = [];
   const rows = [];
   if (frame.error) {
-    rows.push({ key: "error", value: `${frame.error.name}: ${frame.error.message}`, err: true });
+    rows.push({
+      key: "error",
+      value: `${frame.error.name}: ${frame.error.message}`,
+      err: true,
+      type: "Error",
+    });
   } else {
-    rows.push({ key: "return", value: fmt(frame.return) });
+    rows.push({ key: "return", value: fmt(frame.return), type: valueType(frame.return) });
   }
-  const argsFmt = fmt({ args: frame.args || [] });
+  const argVals = Array.isArray(frame.args) ? frame.args : [];
+  const argRows = argVals.map((v, i) => ({
+    key: String(i),
+    value: fmt(v),
+    type: valueType(v),
+  }));
   return {
     name: escapeHtml(frameName(frame)),
-    args: argsFmt,
+    argRows,
     rows,
     error: frame.error ? `${frame.error.name}: ${frame.error.message}` : null,
   };
