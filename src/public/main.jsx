@@ -60,8 +60,8 @@ export default function CallTree() {
           `generated ${new Date(tree.generatedAt).toLocaleTimeString()}`,
       );
       const flow = toFlowModel(roots, {
-        x: (d, sib) => d * 130 + sib * 70,
-        y: (d, sib) => sib * 90,
+        x: (d) => d * 130,
+        y: (d, row) => row * 90,
       });
       setNodes(
         flow.nodes.map((n) => ({

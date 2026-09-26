@@ -119,24 +119,25 @@ export function toFlowModel(roots, layout) {
   const byId = new Map();
   let id = 0;
   const ctr = layout === null ? null : { sib: new Map(), depth: new Map() };
+  let row = 0;
   function visit(frames, parentNid, d) {
-    let sib = 0;
     for (const f of frames) {
       const nid = `n${++id}`;
       byId.set(nid, f);
       let px, py;
       if (ctr) {
         ctr.depth.set(nid, d);
-        px = layout.x(d, sib);
-        py = layout.y(d, sib);
+        px = layout.x(d, row);
+        py = layout.y(d, row);
+        row++;
       } else {
-        px = sib * 210;
+        px = row * 210;
         py = d * 150;
+        row++;
       }
       nodes.push({ id: nid, position: { x: px, y: py }, data: { name: String(f.name || ""), error: !!f.error, frame: f, nid } });
       if (parentNid) edges.push({ id: `${parentNid}-${nid}`, source: parentNid, target: nid });
       visit(f.children || [], nid, d + 1);
-      sib++;
     }
   }
   visit(roots, null, 0);
