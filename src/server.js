@@ -51,9 +51,12 @@ function send(res, status, body, headers = {}) {
   res.end(body);
 }
 
-function sendFile(res, file) {
+function sendFile(res, file, cacheControl) {
   if (!existsSync(file)) return send(res, 404, "not found");
-  res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
+  res.writeHead(200, {
+    "content-type": MIME[extname(file)] ?? "application/octet-stream",
+    ...(cacheControl ? { "cache-control": cacheControl } : {}),
+  });
   createReadStream(file).pipe(res);
 }
 
@@ -93,7 +96,7 @@ export async function startServer({ port = 4600, treePath, distDir = DEFAULT_DIS
         res,
         tree ? 200 : 404,
         tree ? JSON.stringify(tree) : JSON.stringify({ error: "no trace yet" }),
-        { "content-type": "application/json; charset=utf-8" },
+        { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
       );
     }
 
@@ -103,7 +106,7 @@ export async function startServer({ port = 4600, treePath, distDir = DEFAULT_DIS
         res,
         200,
         JSON.stringify({ version: tree ? tree.version : 0 }),
-        { "content-type": "application/json; charset=utf-8" },
+        { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
       );
     }
 
@@ -119,15 +122,18 @@ export async function startServer({ port = 4600, treePath, distDir = DEFAULT_DIS
     // the built viewer: React Flow page at /, hashed bundles under /assets
     if (pathname === "/" || pathname === "/index.html" || pathname === "/vite.html") {
       if (!existsSync(indexFile)) {
-        return send(res, 503, BUILD_HINT, { "content-type": "text/html; charset=utf-8" });
+        return send(res, 503, BUILD_HINT, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        });
       }
-      return sendFile(res, indexFile);
+      return sendFile(res, indexFile, "no-store");
     }
 
     if (pathname.startsWith("/assets/")) {
       const file = join(distDir, pathname.slice(1));
       if (!file.startsWith(distDir)) return send(res, 404, "not found");
-      return sendFile(res, file);
+      return sendFile(res, file, "public, max-age=31536000, immutable");
     }
 
     send(res, 404, "not found");
