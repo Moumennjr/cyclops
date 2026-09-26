@@ -25,7 +25,8 @@ function ensureBuild() {
   });
 }
 
-// Fire-and-forget browser launch: not tracked, it exits on its own.
+// Fire-and-forget browser launch: not a server, but a hung opener must not
+// outlive us — reap it on exit (the browser it spawned is not our child).
 function openBrowser(url) {
   if (!process.stderr.isTTY) return;
   const [cmd, ...args] =
@@ -35,9 +36,16 @@ function openBrowser(url) {
         ? ["cmd", "/c", "start", "", url]
         : ["xdg-open", url];
   try {
-    const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
-    child.on("error", () => {});
-    child.unref();
+    const opener = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    opener.on("error", () => {});
+    opener.unref();
+    process.once("exit", () => {
+      if (opener.exitCode === null) {
+        try {
+          opener.kill("SIGKILL");
+        } catch {}
+      }
+    });
   } catch {}
 }
 
