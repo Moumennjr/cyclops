@@ -9,6 +9,9 @@ import {
   useEdgesState,
   ReactFlowProvider,
   useReactFlow,
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
@@ -18,9 +21,11 @@ import {
   subtreeIds,
   edgesBySource,
   computeStats,
+  edgeIO,
 } from "./flow-model.js";
 
 const NODE_W = 170;
+const edgeTypes = { default: CycEdge };
 const SPEEDS = [
   { label: "0.5x", ms: 900 },
   { label: "1x", ms: 450 },
@@ -65,8 +70,22 @@ export default function CallTree() {
           data: { ...n.data, width: NODE_W, label: n.data.name, error: !!n.data.error },
         })),
       );
+      const bySource = {};
+      for (const e of flow.edges) (bySource[e.source] = bySource[e.source] || []).push(e);
       setEdges(
-        flow.edges.map((e) => ({ ...e, id: e.id || `${e.source}-${e.target}`, type: "default" })),
+        flow.edges.map((e) => {
+          const sibs = bySource[e.source];
+          const i = sibs.indexOf(e);
+          const n = sibs.length;
+          // spread sibling labels along their curves so same-row pills never stack
+          const t = 0.5 + (i - (n - 1) / 2) * (0.65 / Math.max(1, n - 1));
+          return {
+            ...e,
+            id: e.id || `${e.source}-${e.target}`,
+            type: "default",
+            data: { ...edgeIO(flow.byId.get(e.target)), t },
+          };
+        }),
       );
       setFrameCount(flow.nodes.length);
       setTreeKey(String(tree.version || tree.generatedAt || ""));
@@ -214,6 +233,7 @@ export default function CallTree() {
         maxZoom={3}
         proOptions={{ hideAttribution: false }}
         colorMode="light"
+        edgeTypes={edgeTypes}
       >
         <Background gap={18} size={1} color="#e2e8f0" />
         <Controls showInteractive={false} />
@@ -259,6 +279,48 @@ export default function CallTree() {
         )}
       </ReactFlow>
     </div>
+  );
+}
+
+// point along the single cubic of a bezier path string
+function pointOn(d, t) {
+  const m = (d || "").match(/-?\d+(?:\.\d+)?/g);
+  if (!m || m.length < 8) return null;
+  const [x0, y0, x1, y1, x2, y2, x3, y3] = m.map(Number);
+  const u = 1 - t;
+  return {
+    x: u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3,
+    y: u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3,
+  };
+}
+
+// dashed bezier carrying the call's input and output in a pill on the line
+function CycEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data }) {
+  const [path] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
+  const t = data && typeof data.t === "number" ? data.t : 0.5;
+  const pt = pointOn(path, t) || { x: 0, y: 0 };
+  return (
+    <>
+      <BaseEdge id={id} path={path} />
+      <EdgeLabelRenderer>
+        <div
+          className="cyc-io nodrag nopan"
+          style={{ transform: `translate(-50%, -50%) translate(${pt.x}px, ${pt.y}px)` }}
+        >
+          <span className="cyc-io-in">{(data && data.input) || "()"}</span>
+          <span className={`cyc-io-out${data && data.err ? " cyc-io-err" : ""}`}>
+            {"→ "}{(data && data.output) || ""}
+          </span>
+        </div>
+      </EdgeLabelRenderer>
+    </>
   );
 }
 

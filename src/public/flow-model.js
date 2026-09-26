@@ -100,6 +100,17 @@ export function describeFrame(frame) {
   };
 }
 
+// input/output for the arrow into a frame: its args in, its return or error out
+export function edgeIO(frame) {
+  if (!frame) return { input: "()", output: "" };
+  const args = Array.isArray(frame.args) ? frame.args : [];
+  const input = `(${args.map(fmt).join(", ")})`;
+  if (frame.error) {
+    return { input, output: `${frame.error.name}: ${frame.error.message}`, err: true };
+  }
+  return { input, output: fmt(frame.return) };
+}
+
 export function buildTreeIndex(edges) {
   const parent = new Map();
   const children = new Map();
