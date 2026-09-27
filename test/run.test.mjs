@@ -698,6 +698,72 @@ test("instrumentation preserves this, evaluation order, closures and arguments",
   assert.equal(findFrame(tree.roots, "boom").error.message, "kaboom", "the same error object reaches the caller");
 });
 
+test("closures and higher-order functions are traced", () => {
+  const src = `
+    const log = [];
+    function makeCounter(start) {
+      let n = start;
+      return function step(by) { n += by; return n; };
+    }
+    function apply(fn, x) { return fn(x); }
+    function twice(fn) { return function (x) { return fn(fn(x)); } }
+    function inc(n) { return n + 1; }
+
+    const c = makeCounter(10);
+    log.push(c(1));
+    log.push(c(2));
+    log.push(apply(inc, 1));
+    const doubled = twice(inc);
+    log.push(doubled(5));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify([11, 13, 2, 7]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "and the closure state really advances");
+  assert.ok(tree, "tree captured");
+
+  assert.deepEqual(
+    tree.roots.map((f) => f.name),
+    ["makeCounter", "step", "step", "apply", "twice", "anonymous"],
+    "a closure invoked after its factory returned is its own root frame; it is anonymous where it is created, so it keeps the name the syntax gave it",
+  );
+
+  const [step1, step2] = tree.roots.filter((f) => f.name === "step");
+  assert.equal(step1.return, 11, "first call sees the captured start value");
+  assert.equal(step2.return, 13, "the second sees the state the first left behind");
+  assert.ok(
+    step1.endedAt <= step2.startedAt,
+    "the factory frame is long closed before the closure runs",
+  );
+
+  const [applyFrame] = tree.roots.filter((f) => f.name === "apply");
+  assert.equal(applyFrame.children.length, 1, "a callback invoked from inside its caller nests");
+  assert.equal(applyFrame.children[0].name, "inc");
+  assert.equal(applyFrame.children[0].return, 2);
+
+  const doubled = findFrame(tree.roots, "anonymous");
+  assert.equal(doubled.children.length, 2, "twice() runs the inner function twice");
+  assert.deepEqual(
+    doubled.children.map((f) => f.name),
+    ["inc", "inc"],
+    "each pass is a frame of its own",
+  );
+  assert.equal(doubled.return, 7);
+
+  assert.equal(
+    findFrames(tree.roots, "inc").length,
+    3,
+    "inc runs once through apply and twice through the composed function",
+  );
+});
+
 test("try/catch/finally inside a traced function keeps JS semantics", () => {
   const src = `
     const log = [];
