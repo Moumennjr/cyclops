@@ -698,6 +698,73 @@ test("instrumentation preserves this, evaluation order, closures and arguments",
   assert.equal(findFrame(tree.roots, "boom").error.message, "kaboom", "the same error object reaches the caller");
 });
 
+test("try/catch/finally inside a traced function keeps JS semantics", () => {
+  const src = `
+    const log = [];
+    function caught() {
+      try { throw new Error("inside"); } catch (e) { return "caught:" + e.message; }
+    }
+    function withFinally() {
+      try { return "from-try"; } finally { log.push("finally-ran"); }
+    }
+    function finallyWins() {
+      try { throw new Error("swallowed"); } finally { return "finally-wins"; }
+    }
+    function fallThrough() {
+      try { log.push("body"); } catch (e) { log.push("never"); }
+      return "after";
+    }
+    log.push(caught());
+    log.push(withFinally());
+    log.push(finallyWins());
+    log.push(fallThrough());
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify([
+    "caught:inside",
+    "finally-ran",
+    "from-try",
+    "finally-wins",
+    "body",
+    "after",
+  ]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree, userText } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "and it is the output JS specifies");
+  assert.equal(userText, "", "no stray stderr");
+  assert.ok(tree, "tree captured");
+
+  const frame = (name) => findFrame(tree.roots, name);
+  assert.equal(frame("caught").error, null, "an error the function caught is not an error of the function");
+  assert.equal(frame("caught").return, "caught:inside");
+
+  assert.equal(frame("withFinally").return, "from-try", "finally runs, the return value stands");
+  assert.equal(frame("withFinally").error, null);
+
+  assert.equal(
+    frame("finallyWins").return,
+    "finally-wins",
+    "return in finally beats the throw, as in plain JS",
+  );
+  assert.equal(
+    frame("finallyWins").error,
+    null,
+    "and the frame must not be marked as an error the program never saw",
+  );
+
+  assert.equal(frame("fallThrough").return, "after", "a try that never throws falls through");
+  for (const f of tree.roots) {
+    assert.equal(typeof f.duration, "number", `${f.name} closes with a duration`);
+    assert.equal(f.endedAt - f.startedAt, f.duration);
+  }
+});
+
 test("escaping errors are recorded on frames and exit code is non-zero", () => {
   const src = `function a(){ b(); } function b(){ throw new Error("boom"); } a();`;
   const res = runInstrumented(src);
