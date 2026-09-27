@@ -9,7 +9,14 @@ export function walk(value, o, depth, seen) {
   const t = typeof value;
   if (value === null) return null;
   if (t === "undefined") return { type: "undefined" };
-  if (t === "number" || t === "boolean") return value;
+  if (t === "number") {
+    // JSON turns these into null, so tag them and keep them distinguishable
+    if (Number.isNaN(value)) return { type: "nan" };
+    if (!Number.isFinite(value))
+      return { type: "infinity", value: value > 0 ? "Infinity" : "-Infinity" };
+    return value;
+  }
+  if (t === "boolean") return value;
   if (t === "bigint") return { type: "bigint", value: String(value) + "n" };
   if (t === "symbol") return { type: "symbol", value: String(value) };
   if (t === "function")

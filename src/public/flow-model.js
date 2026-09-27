@@ -15,6 +15,8 @@ export function fmt(v) {
     if (v.type) {
       switch (v.type) {
         case "undefined": return "undefined";
+        case "nan": return "NaN";
+        case "infinity": return v.value || "Infinity";
         case "bigint":
         case "symbol":
         case "date":
@@ -24,6 +26,7 @@ export function fmt(v) {
         case "circular": return "[Circular]";
         case "truncated": return `[${v.ctor ?? "…"}]`;
         case "error": return `${v.name}: ${v.message}`;
+        case "unserializable": return `${v.ctor ?? "?"} (unserializable)`;
         case "…": return `…${v.length} more`;
       }
     }
@@ -132,6 +135,8 @@ export function valueType(v) {
     if (v.type) {
       switch (v.type) {
         case "undefined": return "undefined";
+        case "nan":
+        case "infinity": return "number";
         case "bigint": return "bigint";
         case "symbol": return "symbol";
         case "date": return "Date";

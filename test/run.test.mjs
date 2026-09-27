@@ -431,6 +431,134 @@ test("duration is the time between enter and exit, on every frame", () => {
   assert.equal(wraps.length, 2, "each wrap call carries its own duration");
 });
 
+test("arguments are snapshotted for every parameter shape", () => {
+  const src = `
+    function plain(a, b) { return [a, b]; }
+    function defaults(a = 7, b = a * 2) { return [a, b]; }
+    function rest(...xs) { return xs.length; }
+    function destruct({ name, age = 1 }, [first, ...tail]) {
+      return name + ":" + age + ":" + first + ":" + tail.length;
+    }
+    function takes(fn) { return fn(1); }
+    function weird(u, n, b, s) { return null; }
+
+    plain(1, "two");
+    defaults();
+    defaults(3);
+    rest(1, 2, 3);
+    destruct({ name: "ann" }, ["x", 9, 8]);
+    takes(function twice(n) { return n * 2; });
+    weird(undefined, null, 10n, Symbol("tag"));
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "every parameter shape runs");
+  assert.ok(tree, "tree captured");
+
+  const [plain] = findFrames(tree.roots, "plain");
+  assert.deepEqual(plain.args, [1, "two"], "primitives pass through untouched");
+  assert.deepEqual(plain.return, [1, "two"], "an array return is a real array");
+
+  const defaults = findFrames(tree.roots, "defaults");
+  assert.deepEqual(defaults[0].args, [7, 14], "defaults are applied before the frame opens");
+  assert.deepEqual(defaults[1].args, [3, 6], "an explicit argument wins");
+
+  const [rest] = findFrames(tree.roots, "rest");
+  assert.equal(fmt(rest.args[0]), "[1, 2, 3]", "a rest parameter is the collected array");
+
+  const [destruct] = findFrames(tree.roots, "destruct");
+  assert.deepEqual(destruct.args, ["ann", 1, "x", [9, 8]], "each binding of a destructured parameter");
+  assert.equal(destruct.return, "ann:1:x:2");
+
+  const [takes] = findFrames(tree.roots, "takes");
+  assert.equal(fmt(takes.args[0]), "fn twice", "a function argument is named, not dumped");
+  assert.equal(takes.return, 2, "and it still runs");
+
+  const [weird] = findFrames(tree.roots, "weird");
+  assert.deepEqual(
+    weird.args.map((a) => fmt(a)),
+    ["undefined", "null", "10n", "Symbol(tag)"],
+    "undefined, null, BigInt and Symbol stay distinguishable",
+  );
+  assert.equal(fmt(weird.return), "null", "a null return is not an undefined one");
+});
+
+test("awkward return values serialize without crashing the tracer", () => {
+  const src = `
+    function circularRef() { const o = { a: 1 }; o.self = o; return o; }
+    function nested() { return { a: { b: { c: { d: 1 } } } }; }
+    function longText() { return "x".repeat(500); }
+    function bigList() { return Array.from({ length: 50 }, (_, i) => i); }
+    function bigObj() { const o = {}; for (let i = 0; i < 100; i++) o["k" + i] = i; return o; }
+    function when() { return new Date(0); }
+    function pattern() { return /ab+c/gi; }
+    function huge() { return 10n ** 30n; }
+    function tag() { return Symbol("tag"); }
+    function poison() {
+      const o = { ok: 1 };
+      Object.defineProperty(o, "bad", { enumerable: true, get() { throw new Error("nope"); } });
+      return o;
+    }
+
+    circularRef(); nested(); longText(); bigList(); bigObj();
+    when(); pattern(); huge(); tag(); poison();
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the program runs to completion");
+  assert.ok(tree, "tree captured despite every awkward value");
+
+  const ret = (name) => findFrame(tree.roots, name).return;
+  assert.equal(fmt(ret("circularRef")), "{a: 1, self: [Circular]}", "a cycle is named, not followed");
+  assert.equal(fmt(ret("nested")), "{a: {b: {c: [Object]}}}", "depth is capped at three levels");
+
+  const text = ret("longText");
+  assert.equal(text.type, "string");
+  assert.equal(text.length, 500, "the original length survives truncation");
+
+  const list = ret("bigList");
+  assert.equal(list.length, 9, "eight entries plus the overflow marker");
+  assert.deepEqual(list[8], { type: "…", length: 50 });
+  assert.match(fmt(list), /50 more/);
+
+  const obj = ret("bigObj");
+  assert.equal(obj["…"].length, 100, "an object reports how many keys were dropped");
+  assert.match(fmt(obj), /100 more/);
+
+  assert.equal(fmt(ret("when")), "1970-01-01T00:00:00.000Z", "Date renders as an ISO string");
+  assert.equal(fmt(ret("pattern")), "/ab+c/gi", "RegExp renders as its literal");
+  assert.match(fmt(ret("huge")), /n$/, "BigInt keeps its suffix");
+  assert.equal(fmt(ret("tag")), "Symbol(tag)", "Symbol keeps its description");
+
+  const poison = ret("poison");
+  assert.equal(poison.type, "unserializable", "a getter that throws degrades instead of taking the tracer down");
+  assert.equal(fmt(poison), "Object (unserializable)", "and the viewer can say so");
+});
+
+test("NaN and Infinity survive the trip through JSON", () => {
+  const src = `
+    function nan() { return NaN; }
+    function plusInf() { return Infinity; }
+    function minusInf() { return -Infinity; }
+    function nanArg(x) { return 0; }
+    nan();
+    plusInf();
+    minusInf();
+    nanArg(NaN);
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0);
+  assert.ok(tree, "tree captured");
+
+  assert.equal(fmt(findFrame(tree.roots, "nan").return), "NaN", "NaN is not null");
+  assert.equal(fmt(findFrame(tree.roots, "plusInf").return), "Infinity", "Infinity is not null");
+  assert.equal(fmt(findFrame(tree.roots, "minusInf").return), "-Infinity", "-Infinity keeps its sign");
+
+  const argFrame = findFrame(tree.roots, "nanArg");
+  assert.equal(fmt(argFrame.args[0]), "NaN", "NaN survives as an argument too");
+});
+
 test("direct recursion nests one frame per invocation", () => {
   const src = `
     function fact(n) { return n <= 1 ? 1 : n * fact(n - 1); }
