@@ -1270,6 +1270,87 @@ test("promise callbacks nest under the frame that attached them", () => {
   );
 });
 
+test("a mixed asynchronous program traces correctly end to end", () => {
+  const src = `
+    const log = [];
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    class Fetcher {
+      #base;
+      constructor(base) { this.#base = base; }
+      async get(path) {
+        await sleep(15);
+        return this.#base + path;
+      }
+    }
+    async function one(f) { return await f.get("/one"); }
+    async function two(f) { return await f.get("/two"); }
+    async function both(f) {
+      const [a, b] = await Promise.all([one(f), two(f)]);
+      log.push(a + "," + b);
+      for (const tag of ["x", "y"]) {
+        await sleep(5);
+        log.push("tag:" + tag);
+      }
+      return a.length + b.length;
+    }
+    const f = new Fetcher("base");
+    both(f).then((n) => log.push("len:" + n));
+    await sleep(80);
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify([
+    "base/one,base/two",
+    "tag:x",
+    "tag:y",
+    "len:16",
+  ]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "async functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  const both = findFrame(tree.roots, "both");
+  assert.ok(both, "the entry point is a root");
+  assert.equal(both.return, 16);
+  assert.ok(both.duration >= 20, "its frame spans every await inside it");
+  assert.deepEqual(
+    both.children.map((f) => f.name),
+    ["one", "two", "sleep", "sleep"],
+    "the two parallel calls and the loop's own waits nest under their caller",
+  );
+
+  for (const name of ["one", "two"]) {
+    const call = findFrame(both.children, name);
+    assert.ok(call, name + " is a child of both");
+    assert.equal(call.children.length, 1, name + " awaited exactly one call");
+    const get = call.children[0];
+    assert.equal(get.name, "get", "the class method is a frame under its caller");
+    assert.equal(get.return, "base/" + name);
+    assert.ok(get.duration >= 15, "the method's frame spans its own await");
+    assert.equal(get.children[0].name, "sleep");
+  }
+
+  const all = [];
+  (function walk(frames) {
+    for (const f of frames) { all.push(f); walk(f.children); }
+  })(tree.roots);
+  for (const f of all) {
+    assert.equal(typeof f.endedAt, "number", `${f.name} closed`);
+    assert.equal(f.error, null, `${f.name} did not see an error`);
+  }
+  assert.equal(findFrames(tree.roots, "get").length, 2, "both calls of the method are traced");
+  assert.ok(
+    tree.roots.some((f) => f.name === "anonymous" && f.return === 4),
+    "the .then callback ran last, as a root",
+  );
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];
