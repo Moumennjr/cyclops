@@ -765,6 +765,58 @@ test("try/catch/finally inside a traced function keeps JS semantics", () => {
   }
 });
 
+test("errors propagate, rethrow and keep their class", () => {
+  const src = `
+    const log = [];
+    class AppError extends Error {
+      constructor(msg) { super(msg); this.name = "AppError"; }
+    }
+    function leaf() { throw new TypeError("boom"); }
+    function middle() { try { leaf(); } catch (e) { throw e; } }
+    function top() { try { middle(); } catch (e) { return "top-caught:" + e.name; } }
+    log.push(top());
+
+    function inner() { throw new AppError("nope"); }
+    function outer() { try { inner(); } catch (e) { return e.name + "/" + e.message; } }
+    log.push(outer());
+
+    function raw() { throw "just-a-string"; }
+    try { raw(); } catch (e) { log.push("raw:" + typeof e + ":" + e); }
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["top-caught:TypeError", "AppError/nope", "raw:string:just-a-string"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  const byName = (name) => findFrame(tree.roots, name);
+  assert.deepEqual(byName("leaf").error, { name: "TypeError", message: "boom" });
+  assert.deepEqual(
+    byName("middle").error,
+    { name: "TypeError", message: "boom" },
+    "a rethrow marks the frame it crossed",
+  );
+  assert.equal(byName("top").error, null, "the frame that caught it is clean");
+  assert.equal(byName("top").return, "top-caught:TypeError");
+
+  assert.deepEqual(byName("inner").error, { name: "AppError", message: "nope" }, "subclass keeps its name");
+  assert.equal(byName("outer").error, null);
+  assert.equal(byName("outer").return, "AppError/nope");
+
+  assert.deepEqual(
+    byName("raw").error,
+    { name: "Error", message: "just-a-string" },
+    "a thrown non-Error is still recorded",
+  );
+});
+
 test("escaping errors are recorded on frames and exit code is non-zero", () => {
   const src = `function a(){ b(); } function b(){ throw new Error("boom"); } a();`;
   const res = runInstrumented(src);
