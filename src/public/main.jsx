@@ -24,6 +24,9 @@ import {
   subtreeIds,
   computeStats,
   edgeIO,
+  traceSpan,
+  frameTime,
+  fmtDur,
   NODE_W,
   LEVEL,
 } from "./flow-model.js";
@@ -60,6 +63,8 @@ export default function CallTree() {
   const [status, setStatus] = useState("connecting");
   const [stats, setStats] = useState("");
   const [treeKey, setTreeKey] = useState("");
+  // first call in the trace: every timestamp is shown relative to it
+  const [t0, setT0] = useState(null);
 
   // ---- replay state (starts at 0 so the tree animates itself on load) ----
   const [reveal, setReveal] = useState(0);
@@ -95,18 +100,29 @@ export default function CallTree() {
       if (key !== lastTreeKey.current) {
         lastTreeKey.current = key;
         dragPos.current.clear();
+        const span = traceSpan(roots);
+        const t = span ? span.start : null;
         const st = computeStats(roots);
+        const ran =
+          span && typeof span.end === "number" ? ` \u00b7 ran ${fmtDur(span.end - span.start)}` : "";
         setStats(
           `${st.calls} calls \u00b7 depth ${st.maxDepth} \u00b7 ` +
-            `${st.roots} root${st.roots === 1 ? "" : "s"} \u00b7 ` +
+            `${st.roots} root${st.roots === 1 ? "" : "s"}${ran} \u00b7 ` +
             `generated ${new Date(tree.generatedAt).toLocaleTimeString()}`,
         );
         const flow = toFlowModel(roots, { level: LEVEL, width: NODE_W });
         setRoots(roots);
+        setT0(t);
         setNodes(
           flow.nodes.map((n) => ({
             ...n,
-            data: { ...n.data, width: NODE_W, label: n.data.name, error: !!n.data.error },
+            data: {
+              ...n.data,
+              width: NODE_W,
+              label: n.data.name,
+              error: !!n.data.error,
+              time: frameTime(n.data.frame, t),
+            },
           })),
         );
         setEdges(
@@ -566,6 +582,7 @@ export default function CallTree() {
           <div className="react-flow__panel top right" style={{ zIndex: 20 }}>
             <FlowDetail
               info={info}
+              t0={t0}
               chain={detail ? detail.chain : []}
               kids={detail ? detail.kids : []}
               onSelect={jumpTo}
@@ -587,6 +604,13 @@ function FlowNode({ data, isConnectable }) {
   const sub = [];
   if (data && data.line != null) sub.push(`L${data.line}`);
   if (data && data.argCount) sub.push(`${data.argCount} arg${data.argCount === 1 ? "" : "s"}`);
+  const tm = (data && data.time) || null;
+  const timeChip = tm ? [tm.at, tm.dur].filter(Boolean).join(" · ") : "";
+  const timeTitle = tm
+    ? tm.open
+      ? `started ${tm.startAbs}, never returned`
+      : `started ${tm.startAbs} · ended ${tm.endAbs}`
+    : "";
   return (
     <>
       <Handle type="target" position={Position.Top} id="in" isConnectable={isConnectable} />
@@ -597,11 +621,18 @@ function FlowNode({ data, isConnectable }) {
       </div>
       <div className="cyc-meta">
         <span className="cyc-meta-v">{sub.join(" · ")}</span>
-        {data && data.hidden > 0 && (
-          <span className="cyc-hid" title={`${data.hidden} call${data.hidden === 1 ? "" : "s"} hidden`}>
-            ▸ {data.hidden}
-          </span>
-        )}
+        <span className="cyc-meta-r">
+          {data && data.hidden > 0 && (
+            <span className="cyc-hid" title={`${data.hidden} call${data.hidden === 1 ? "" : "s"} hidden`}>
+              ▸ {data.hidden}
+            </span>
+          )}
+          {timeChip && (
+            <span className="cyc-time" title={timeTitle}>
+              {timeChip}
+            </span>
+          )}
+        </span>
       </div>
       <div className={`cyc-out${err ? " cyc-out-err" : ""}`} title={(data && data.output) || ""}>
         <span className="cyc-out-k">{err ? "✗" : "↩"}</span>
@@ -743,11 +774,12 @@ function CameraRig({ follow, shown, total, activeId }) {
 }
 
 // the inspection panel: everything too detailed for the graph itself
-function FlowDetail({ info, chain, kids, onSelect, onClose, isCollapsed, onCollapse, onExpand }) {
+function FlowDetail({ info, t0, chain, kids, onSelect, onClose, isCollapsed, onCollapse, onExpand }) {
   const detail = info.detail;
   if (!detail) return null;
   const argRows = detail.argRows || [];
   const frame = info.frame || {};
+  const tm = frameTime(frame, t0);
   const line = frame.loc && frame.loc.line;
   const name = String(frame.name || detail.name || "?");
   const outKey = frame.error ? "throws" : "returns";
@@ -775,6 +807,28 @@ function FlowDetail({ info, chain, kids, onSelect, onClose, isCollapsed, onColla
             </React.Fragment>
           ))}
         </div>
+      )}
+      <div className="cyc-sec">timing</div>
+      {tm ? (
+        <>
+          <div className="cyc-row">
+            <span className="cyc-k">started</span>
+            <span className="cyc-v">{tm.at}</span>
+            <span className="cyc-type">{tm.startAbs}</span>
+          </div>
+          <div className="cyc-row">
+            <span className="cyc-k">ended</span>
+            <span className="cyc-v">{tm.open ? "…" : tm.endAt}</span>
+            <span className="cyc-type">{tm.open ? "never returned" : tm.endAbs}</span>
+          </div>
+          <div className="cyc-row">
+            <span className="cyc-k">duration</span>
+            <span className="cyc-v">{tm.dur || "—"}</span>
+            <span className="cyc-type">{tm.open ? "in flight" : ""}</span>
+          </div>
+        </>
+      ) : (
+        <div className="cyc-row cyc-empty">(no timestamps)</div>
       )}
       <div className="cyc-sec">arguments</div>
       {argRows.length === 0 ? (

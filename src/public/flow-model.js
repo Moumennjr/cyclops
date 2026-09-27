@@ -34,6 +34,70 @@ export function fmt(v) {
   return String(v);
 }
 
+// ---- timing -------------------------------------------------------------
+// frames carry wall-clock ms; the viewer shows them relative to the first
+// call in the trace (+12ms) with the duration alongside, so a tree of calls
+// reads as a sequence instead of a wall of epoch numbers
+
+export function fmtDur(ms) {
+  if (typeof ms !== "number" || !isFinite(ms)) return "";
+  const v = Math.max(0, ms);
+  if (v === 0) return "0ms";
+  if (v < 1) return "<1ms";
+  if (v < 1000) return `${Math.round(v)}ms`;
+  if (v < 60000) return `${(v / 1000).toFixed(2)}s`;
+  const m = Math.floor(v / 60000);
+  return `${m}m ${Math.round((v % 60000) / 1000)}s`;
+}
+
+// offset from the first call: +0ms on the root
+export function fmtAt(ms, t0) {
+  if (typeof ms !== "number" || typeof t0 !== "number" || !isFinite(ms) || !isFinite(t0)) {
+    return "";
+  }
+  return `+${fmtDur(ms - t0)}`;
+}
+
+// HH:MM:SS.mmm in local time, for the detail card's absolute column
+export function clock(ms) {
+  if (typeof ms !== "number" || !isFinite(ms)) return "";
+  const d = new Date(ms);
+  const p = (n, w = 2) => String(n).padStart(w, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
+// the trace's wall-clock span: first call in, last call out; null when the
+// trace predates timestamps
+export function traceSpan(roots) {
+  let start = null;
+  let end = null;
+  const walk = (frames) => {
+    for (const f of frames || []) {
+      const s = f && f.startedAt;
+      if (typeof s === "number" && isFinite(s) && (start === null || s < start)) start = s;
+      const e = f && f.endedAt;
+      if (typeof e === "number" && isFinite(e) && (end === null || e > end)) end = e;
+      walk(f && f.children);
+    }
+  };
+  walk(roots);
+  return start === null ? null : { start, end };
+}
+
+// what the node chip and the detail card show for one frame
+export function frameTime(frame, t0) {
+  if (!frame || typeof frame.startedAt !== "number" || !isFinite(frame.startedAt)) return null;
+  const end = typeof frame.endedAt === "number" && isFinite(frame.endedAt) ? frame.endedAt : null;
+  return {
+    at: fmtAt(frame.startedAt, t0),
+    endAt: end === null ? "" : fmtAt(end, t0),
+    dur: end === null ? null : fmtDur(end - frame.startedAt),
+    startAbs: clock(frame.startedAt),
+    endAbs: end === null ? null : clock(end),
+    open: end === null,
+  };
+}
+
 // one shared geometry for layout + rendering, so nodes can never overlap and
 // every level sits on the same horizontal band
 export const NODE_W = 184;

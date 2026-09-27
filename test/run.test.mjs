@@ -20,6 +20,11 @@ import { splitTree, writeTree } from "../src/treeio.js";
 import {
   computeStats,
   fmt,
+  fmtDur,
+  fmtAt,
+  clock,
+  frameTime,
+  traceSpan,
   describeFrame,
   toFlowModel,
   buildTreeIndex,
@@ -132,6 +137,44 @@ test("fmt renders tagged snapshots readably", () => {
     fmt({ type: "string", value: "hello world", length: 100 }),
     '"hello world"…',
   );
+});
+
+test("timing helpers show relative offsets and durations", () => {
+  assert.equal(fmtDur(0), "0ms");
+  assert.equal(fmtDur(0.4), "<1ms");
+  assert.equal(fmtDur(14), "14ms");
+  assert.equal(fmtDur(1234), "1.23s");
+  assert.equal(fmtDur(90500), "1m 31s");
+  assert.equal(fmtDur(NaN), "");
+
+  assert.equal(fmtAt(1000, 985), "+15ms");
+  assert.equal(fmtAt(1000, 1000), "+0ms");
+  assert.equal(fmtAt(null, 0), "");
+
+  assert.match(clock(1790470100228), /^\d{2}:\d{2}:\d{2}\.\d{3}$/);
+
+  const roots = [
+    {
+      name: "a",
+      startedAt: 600,
+      endedAt: 720,
+      children: [{ name: "b", startedAt: 400, endedAt: 520, children: [] }],
+    },
+  ];
+  assert.deepEqual(traceSpan(roots), { start: 400, end: 720 });
+  assert.equal(traceSpan([{ name: "x" }]), null, "a trace without timestamps has no span");
+
+  const tm = frameTime(roots[0], 400);
+  assert.equal(tm.at, "+200ms");
+  assert.equal(tm.endAt, "+320ms");
+  assert.equal(tm.dur, "120ms");
+  assert.equal(tm.open, false);
+  assert.equal(frameTime({ name: "late" }, 400), null, "frames without startedAt show nothing");
+
+  const open = frameTime({ startedAt: 400, endedAt: null }, 400);
+  assert.equal(open.at, "+0ms");
+  assert.equal(open.dur, null);
+  assert.equal(open.open, true);
 });
 
 test("cli traces a fixture end to end", () => {
