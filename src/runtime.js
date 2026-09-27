@@ -60,6 +60,23 @@ function __resume(id, value) {
   return value;
 }
 
+function __cb(id, fn) {
+  if (typeof fn !== "function") return fn;
+  return function () {
+    const frame = __find(id);
+    if (!frame) return fn.apply(this, arguments);
+    const wasSuspended = __cyc_suspended.has(id);
+    __cyc_suspended.delete(id);
+    __cyc_stack.push(frame);
+    try {
+      return fn.apply(this, arguments);
+    } finally {
+      __remove(frame);
+      if (wasSuspended) __cyc_suspended.add(id);
+    }
+  };
+}
+
 function __ret(id, value) {
   const frame = __find(id);
   if (frame) {

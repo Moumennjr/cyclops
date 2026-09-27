@@ -2,6 +2,12 @@ import * as t from "@babel/types";
 
 const processed = new WeakSet();
 const awaited = new WeakSet();
+const SCHEDULERS = new Set([
+  "setTimeout",
+  "setInterval",
+  "setImmediate",
+  "queueMicrotask",
+]);
 
 function keyName(key) {
   if (t.isIdentifier(key)) return key.name;
@@ -112,6 +118,22 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
           },
           TryStatement(p) {
             if (isAsync && p.node.finalizer) p.node.finalizer.body.unshift(unsuspend());
+          },
+          CallExpression(p) {
+            const callee = p.node.callee;
+            const bare = t.isIdentifier(callee) && SCHEDULERS.has(callee.name);
+            const nextTick =
+              t.isMemberExpression(callee) &&
+              !callee.computed &&
+              t.isIdentifier(callee.object, { name: "process" }) &&
+              t.isIdentifier(callee.property, { name: "nextTick" });
+            if (!bare && !nextTick) return;
+            const first = p.node.arguments[0];
+            if (!first || t.isStringLiteral(first)) return;
+            p.node.arguments[0] = t.callExpression(t.identifier("__cb"), [
+              t.identifier(cycId),
+              first,
+            ]);
           },
         });
 

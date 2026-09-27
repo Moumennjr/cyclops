@@ -1161,6 +1161,52 @@ test("a rejected await records the error on every frame it crosses", () => {
   );
 });
 
+test("timer and microtask callbacks nest under the frame that scheduled them", () => {
+  const src = `
+    const log = [];
+    function later() { log.push("later"); return "L"; }
+    function micro() { log.push("micro"); return "M"; }
+    function scheduleBoth() {
+      setTimeout(later, 30);
+      queueMicrotask(micro);
+      return "scheduled";
+    }
+    scheduleBoth();
+    log.push("now");
+    await new Promise((r) => setTimeout(r, 60));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["now", "micro", "later"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  const scheduleBoth = findFrame(tree.roots, "scheduleBoth");
+  assert.ok(scheduleBoth, "the scheduling call is a root frame");
+  assert.equal(scheduleBoth.return, "scheduled");
+  assert.deepEqual(
+    scheduleBoth.children.map((f) => f.name),
+    ["micro", "later"],
+    "callbacks hang under the frame that scheduled them, in the order they ran",
+  );
+
+  const later = findFrame(scheduleBoth.children, "later");
+  const micro = findFrame(scheduleBoth.children, "micro");
+  assert.equal(later.return, "L");
+  assert.equal(micro.return, "M");
+  assert.ok(
+    micro.startedAt >= scheduleBoth.endedAt && later.startedAt >= scheduleBoth.endedAt,
+    "both callbacks run after the scheduling frame has long closed",
+  );
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];
