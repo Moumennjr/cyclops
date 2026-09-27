@@ -37,13 +37,30 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "src", "cli.js");
 
 function runInstrumented(source) {
-  const { code } = transform(source, { filename: "<test>" });
+  const { code, warnings } = transform(source, { filename: "<test>" });
   const dir = mkdtempSync(join(tmpdir(), "cyc-unit-"));
   const file = join(dir, "prog.mjs");
   writeFileSync(file, runtimeSource() + "\n" + code);
   const res = spawnSync(process.execPath, [file], { encoding: "utf8" });
   rmSync(dir, { recursive: true, force: true });
-  return res;
+  return { ...res, warnings, code };
+}
+
+// run a minimal program and hand back the tree it captured
+function runTree(source) {
+  const out = runInstrumented(source);
+  const { tree } = splitTree(out.stderr);
+  return { res: out, warnings: out.warnings, code: out.code, tree };
+}
+
+// first frame with this name, anywhere in the tree
+function findFrame(frames, name) {
+  for (const f of frames || []) {
+    if (f.name === name) return f;
+    const hit = findFrame(f.children || [], name);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 function runCli(fixture, args = []) {
@@ -93,6 +110,98 @@ test("runtime builds a correct nested tree from executed code", () => {
   assert.equal(outer.children.length, 1);
   assert.equal(outer.children[0].name, "inner");
   assert.equal(outer.children[0].return, 10);
+});
+
+test("arrow functions are traced under the name they are known by", () => {
+  const src = `
+    const add = (a, b) => { return a + b; };
+    const sq = (x) => x * x;
+    add(2, 3);
+    sq(5);
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync arrows must not be skipped");
+  assert.equal(res.status, 0);
+  assert.ok(tree, "tree captured");
+  assert.equal(tree.roots.length, 2, "each top-level arrow call is a root");
+
+  const add = findFrame(tree.roots, "add");
+  assert.ok(add, "block-bodied arrow traced");
+  assert.equal(add.return, 5);
+  assert.equal(add.error, null);
+
+  const sq = findFrame(tree.roots, "sq");
+  assert.ok(sq, "expression-bodied arrow traced");
+  assert.equal(sq.return, 25);
+  assert.equal(sq.endedAt - sq.startedAt >= 0, true, "expression arrow still records timing");
+});
+
+test("function expressions take the name they are known by", () => {
+  const src = `
+    const anon = function (x) { return x + 1; };
+    const named = function inner(n) { return n < 1 ? n : inner(n - 1); };
+    const viaIife = (function () { return 7; })();
+    anon(1);
+    named(3);
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync expressions must not be skipped");
+  assert.equal(res.status, 0);
+  assert.ok(tree, "tree captured");
+
+  const anon = findFrame(tree.roots, "anon");
+  assert.ok(anon, "anonymous expression named after its variable");
+  assert.equal(anon.return, 2);
+
+  const named = findFrame(tree.roots, "inner");
+  assert.ok(named, "named expression keeps its own name");
+  assert.equal(named.return, 0, "self-reference keeps working after wrapping");
+
+  const iife = findFrame(tree.roots, "anonymous");
+  assert.ok(iife, "call of a bare function expression falls back to anonymous");
+  assert.equal(iife.return, 7);
+
+  const innerCalls = [];
+  const collect = (frames) => {
+    for (const f of frames) {
+      if (f.name === "inner") innerCalls.push(f);
+      collect(f.children || []);
+    }
+  };
+  collect(tree.roots);
+  assert.equal(innerCalls.length, 4, "inner(3) down to inner(0) = one frame each");
+});
+
+test("object and class methods are traced under their method names", () => {
+  const src = `
+    const api = {
+      greet(who) { return "hi " + who; },
+      noop() {},
+    };
+    class Box {
+      read() { return 42; }
+    }
+    api.greet("al");
+    api.noop();
+    new Box().read();
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "methods must not be skipped");
+  assert.equal(res.status, 0);
+  assert.ok(tree, "tree captured");
+  assert.equal(tree.roots.length, 3);
+
+  const greet = findFrame(tree.roots, "greet");
+  assert.ok(greet, "method shorthand traced");
+  assert.equal(greet.return, "hi al");
+
+  const noop = findFrame(tree.roots, "noop");
+  assert.ok(noop, "method with no return traced");
+  assert.equal(fmt(noop.return), "undefined", "implicit return is undefined");
+
+  const read = findFrame(tree.roots, "read");
+  assert.ok(read, "class method traced");
+  assert.equal(read.return, 42);
 });
 
 test("escaping errors are recorded on frames and exit code is non-zero", () => {
