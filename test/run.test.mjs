@@ -49,8 +49,8 @@ function runInstrumented(source) {
 // run a minimal program and hand back the tree it captured
 function runTree(source) {
   const out = runInstrumented(source);
-  const { tree } = splitTree(out.stderr);
-  return { res: out, warnings: out.warnings, code: out.code, tree };
+  const { tree, userText } = splitTree(out.stderr);
+  return { res: out, warnings: out.warnings, code: out.code, tree, userText };
 }
 
 // every frame with this name, anywhere in the tree (execution order)
@@ -64,6 +64,17 @@ function findFrames(frames, name) {
   };
   walk(frames);
   return out;
+}
+
+// the same program with nothing done to it: the baseline for comparing
+// behaviour (Rule 3 — instrumentation must not change what the program does)
+function runPlain(source) {
+  const dir = mkdtempSync(join(tmpdir(), "cyc-plain-"));
+  const file = join(dir, "prog.mjs");
+  writeFileSync(file, source);
+  const res = spawnSync(process.execPath, [file], { encoding: "utf8" });
+  rmSync(dir, { recursive: true, force: true });
+  return res;
 }
 
 // first frame with this name
@@ -385,6 +396,66 @@ test("an error at the bottom of a recursion is recorded on every frame it crosse
     assert.equal(fmt(f.return), "undefined", "a frame that propagated an error returns nothing");
     assert.equal(typeof f.endedAt, "number", "the frame is closed");
   }
+});
+
+test("instrumentation preserves this, evaluation order, closures and arguments", () => {
+  const src = `
+    const log = [];
+    let seq = 0;
+    function next(tag) { log.push(tag + ":" + ++seq); return tag; }
+    function order(a, b) { return a + b; }
+
+    const api = {
+      id: "api",
+      method(x) { log.push("this=" + (this && this.id) + ",x=" + x); return this.id + x; },
+    };
+
+    function counterFactory() {
+      let n = 0;
+      return function inc(step) { n += step; return n; };
+    }
+
+    function argInfo() { return [arguments.length, arguments[0]].join("|"); }
+
+    function boom() { throw new RangeError("kaboom"); }
+
+    log.push(api.method(next("a")));
+    log.push(order(next("b"), next("c")));
+    const inc = counterFactory();
+    inc(1);
+    inc(2);
+    log.push("count=" + inc(3));
+    log.push(argInfo(7, 8));
+    try { boom(); } catch (e) { log.push("err=" + e.constructor.name + ":" + e.message); }
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify([
+    "a:1",
+    "this=api,x=a",
+    "apia",
+    "b:2",
+    "c:3",
+    "bc",
+    "count=6",
+    "2|7",
+    "err=RangeError:kaboom",
+  ]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree, userText } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "and it is the output we expect");
+  assert.equal(userText, "", "nothing from the runtime leaks onto the user's stderr");
+
+  assert.ok(tree, "tree captured alongside the output");
+  assert.equal(findFrames(tree.roots, "next").length, 3, "each argument evaluation is traced");
+  assert.equal(findFrames(tree.roots, "inc").length, 3, "the closure outlives its factory call");
+  assert.equal(findFrame(tree.roots, "counterFactory").return.type, "function", "the factory really returns a function");
+  assert.equal(findFrame(tree.roots, "boom").error.message, "kaboom", "the same error object reaches the caller");
 });
 
 test("escaping errors are recorded on frames and exit code is non-zero", () => {
