@@ -132,7 +132,10 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
           ),
         ]);
 
-        path.node.body = t.blockStatement([enterDecl, tryNode]);
+        path.node.body = t.blockStatement(
+          [enterDecl, tryNode],
+          path.node.body.directives,
+        );
       },
     },
   };

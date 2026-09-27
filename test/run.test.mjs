@@ -15,6 +15,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createServer as netServer } from "node:net";
 
 import { transform } from "../src/transform.js";
+import { parse } from "@babel/parser";
 import { runtimeSource, CYC_MARKER } from "../src/runtime.js";
 import { splitTree, writeTree } from "../src/treeio.js";
 import {
@@ -814,6 +815,44 @@ test("callbacks invoked from native methods are traced on their own", () => {
   const names = new Set(tree.roots.map((f) => f.name));
   assert.ok(!names.has("filter") && !names.has("map") && !names.has("reduce"),
     "native methods are not instrumented — only the user's code is");
+});
+
+test("the directive prologue of an instrumented function is kept (Phase 29)", () => {
+  const src = `
+    "use strict";
+    function probe() { "use strict"; return this; }
+    const api = {
+      strict() { "use strict"; return this; },
+    };
+    console.log(probe() === undefined, api.strict() === undefined);
+  `;
+  const { code, warnings } = transform(src, { filename: "<test>" });
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+
+  const ast = parse(code, { sourceType: "unambiguous" });
+  const seen = [];
+  const walkAst = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) return node.forEach(walkAst);
+    if (node.type === "BlockStatement") {
+      for (const d of node.directives || []) seen.push(d.value.value);
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key !== "loc") walkAst(value);
+    }
+  };
+  walkAst(ast);
+
+  assert.deepEqual(
+    ast.program.directives.map((d) => d.value.value),
+    ["use strict"],
+    "the program-level directive is untouched",
+  );
+  assert.deepEqual(
+    seen,
+    ["use strict", "use strict"],
+    "every function keeps \"use strict\" as the first statement of its body — moving it behind __enter would silently drop it",
+  );
 });
 
 test("loops, labels and switches add no frames and keep semantics", () => {
