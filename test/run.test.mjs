@@ -937,6 +937,106 @@ test("the directive prologue of an instrumented function is kept (Phase 29)", ()
   );
 });
 
+test("a mixed synchronous program traces correctly end to end (Phase 30)", () => {
+  const src = `
+    const log = [];
+    function fib(n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }
+    function tally(xs) { let t = 0; for (const x of xs) t += x; return t; }
+    class Bag {
+      #entries = [];
+      static label = "bag";
+      add(k, v) { this.#entries.push([k, v]); return this; }
+      get size() { return this.#entries.length; }
+      report() {
+        let s = "";
+        for (const [k, v] of this.#entries) s += k + "=" + v + ";";
+        return s;
+      }
+    }
+    function risky(n) {
+      try {
+        if (n % 2) throw new Error("odd:" + n);
+        return "even:" + n;
+      } catch (e) {
+        return "caught:" + e.message;
+      } finally {
+        log.push("risky:" + n);
+      }
+    }
+    const bag = new Bag("x").add("a", 1).add("b", 2);
+    log.push(fib(6));
+    log.push(tally([1, 2, 3, 4, 5]));
+    log.push(bag.size);
+    log.push(bag.report());
+    log.push(Bag.label);
+    log.push(risky(2));
+    log.push(risky(3));
+    log.push(risky(4));
+    const memo = {};
+    function slow(n) { if (memo[n]) return memo[n]; return (memo[n] = n * 2); }
+    log.push(slow(4));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify([
+    8,
+    15,
+    2,
+    "a=1;b=2;",
+    "bag",
+    "risky:2",
+    "even:2",
+    "risky:3",
+    "caught:odd:3",
+    "risky:4",
+    "even:4",
+    8,
+  ]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "and the expected values are the values JS produces");
+  assert.ok(tree, "tree captured");
+
+  const all = [];
+  (function walk(frames) {
+    for (const f of frames) { all.push(f); walk(f.children); }
+  })(tree.roots);
+
+  const fibCalls = all.filter((f) => f.name === "fib");
+  assert.equal(fibCalls.length, 25, "fib(6) is fib(5)+fib(4)+… — 25 calls in all");
+  assert.equal(all.length, 34, "every call in the program is exactly one frame");
+
+  for (const f of all) {
+    assert.equal(typeof f.startedAt, "number", `${f.name} has a start`);
+    assert.equal(typeof f.endedAt, "number", `${f.name} closed`);
+    assert.equal(typeof f.duration, "number", `${f.name} has a duration`);
+    assert.ok(f.duration >= 0, `${f.name} duration is not negative`);
+    assert.equal(f.error, null, `${f.name} did not see an error escape`);
+  }
+
+  const nestingHolds = (frames) => {
+    for (const f of frames) {
+      for (const c of f.children) {
+        assert.ok(
+          f.startedAt <= c.startedAt && c.endedAt <= f.endedAt,
+          `${c.name} runs inside ${f.name}`,
+        );
+        nestingHolds([c]);
+      }
+    }
+  };
+  nestingHolds(tree.roots);
+
+  assert.ok(findFrame(tree.roots, "size"), "the getter is a frame");
+  assert.equal(findFrame(tree.roots, "report").return, "a=1;b=2;");
+  assert.equal(findFrame(tree.roots, "slow").return, 8);
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];
