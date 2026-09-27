@@ -53,14 +53,22 @@ function runTree(source) {
   return { res: out, warnings: out.warnings, code: out.code, tree };
 }
 
-// first frame with this name, anywhere in the tree
+// every frame with this name, anywhere in the tree (execution order)
+function findFrames(frames, name) {
+  const out = [];
+  const walk = (list) => {
+    for (const f of list || []) {
+      if (f.name === name) out.push(f);
+      walk(f.children);
+    }
+  };
+  walk(frames);
+  return out;
+}
+
+// first frame with this name
 function findFrame(frames, name) {
-  for (const f of frames || []) {
-    if (f.name === name) return f;
-    const hit = findFrame(f.children || [], name);
-    if (hit) return hit;
-  }
-  return null;
+  return findFrames(frames, name)[0] || null;
 }
 
 function runCli(fixture, args = []) {
@@ -161,14 +169,7 @@ test("function expressions take the name they are known by", () => {
   assert.ok(iife, "call of a bare function expression falls back to anonymous");
   assert.equal(iife.return, 7);
 
-  const innerCalls = [];
-  const collect = (frames) => {
-    for (const f of frames) {
-      if (f.name === "inner") innerCalls.push(f);
-      collect(f.children || []);
-    }
-  };
-  collect(tree.roots);
+  const innerCalls = findFrames(tree.roots, "inner");
   assert.equal(innerCalls.length, 4, "inner(3) down to inner(0) = one frame each");
 });
 
@@ -202,6 +203,71 @@ test("object and class methods are traced under their method names", () => {
   const read = findFrame(tree.roots, "read");
   assert.ok(read, "class method traced");
   assert.equal(read.return, 42);
+});
+
+test("every return path records the value that was actually returned", () => {
+  const src = `
+    function noReturn(x) { const y = x + 1; }
+    function early(c) { if (c) return "yes"; return "no"; }
+    function loopReturn(n) { for (let i = 0; i < 10; i++) { if (i === n) return i; } return -1; }
+    function onlyInIf(c) { if (c) { return 1; } }
+    noReturn(1);
+    early(true);
+    early(false);
+    loopReturn(3);
+    loopReturn(99);
+    onlyInIf(true);
+    onlyInIf(false);
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0);
+  assert.ok(tree, "tree captured");
+
+  const returns = (name) => findFrames(tree.roots, name).map((f) => fmt(f.return));
+  const noReturn = findFrame(tree.roots, "noReturn");
+  assert.ok(noReturn, "function without a return is traced");
+  assert.equal(fmt(noReturn.return), "undefined", "no return statement ends as undefined");
+
+  assert.deepEqual(returns("early"), [fmt("yes"), fmt("no")], "both branches, in call order");
+  assert.deepEqual(returns("loopReturn"), [fmt(3), fmt(-1)], "return inside a loop, and the fall-through");
+  assert.deepEqual(
+    returns("onlyInIf"),
+    [fmt(1), fmt(undefined)],
+    "conditional return and the implicit end of the body",
+  );
+  for (const f of tree.roots) assert.equal(f.error, null, `${f.name} must not look like an error`);
+});
+
+test("a function ending in throw records the error instead of a return", () => {
+  const src = `
+    function boom(flag) { if (flag) { throw new RangeError("bad"); } return "ok"; }
+    function alwaysThrows() { throw new Error("nope"); }
+    try { boom(true); } catch (e) {}
+    boom(false);
+    alwaysThrows();
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.notEqual(res.status, 0, "the program's own exit code is preserved");
+  assert.ok(tree, "tree captured despite the crash");
+  assert.deepEqual(
+    tree.roots.map((f) => f.name),
+    ["boom", "boom", "alwaysThrows"],
+    "frames still appear in call order",
+  );
+
+  const [bad, good] = findFrames(tree.roots, "boom");
+  assert.equal(bad.error.name, "RangeError");
+  assert.equal(bad.error.message, "bad");
+  assert.equal(fmt(bad.return), "undefined", "throwing path records no return value");
+  assert.equal(good.error, null, "the non-throwing call is unaffected");
+  assert.equal(good.return, "ok");
+
+  const [always] = findFrames(tree.roots, "alwaysThrows");
+  assert.equal(always.error.name, "Error");
+  assert.equal(always.error.message, "nope");
+  assert.ok(always.endedAt, "the frame is still closed when it throws");
 });
 
 test("escaping errors are recorded on frames and exit code is non-zero", () => {
