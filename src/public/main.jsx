@@ -70,6 +70,19 @@ export default function CallTree() {
   const [ended, setEnded] = useState(false);
   const userTouched = useRef(false);
   const lastTreeKey = useRef("");
+  // where the user has dragged nodes to (session only: a relayout or a new
+  // trace puts everything back on the grid)
+  const dragPos = useRef(new Map());
+
+  const handleNodesChange = useCallback(
+    (changes) => {
+      for (const c of changes) {
+        if (c.type === "position" && c.position) dragPos.current.set(c.id, c.position);
+      }
+      onNodesChange(changes);
+    },
+    [onNodesChange],
+  );
 
   const reload = useCallback(async (silent) => {
     try {
@@ -81,6 +94,7 @@ export default function CallTree() {
       // polling must not rebuild identical graphs (it would churn every second)
       if (key !== lastTreeKey.current) {
         lastTreeKey.current = key;
+        dragPos.current.clear();
         const st = computeStats(roots);
         setStats(
           `${st.calls} calls \u00b7 depth ${st.maxDepth} \u00b7 ` +
@@ -296,15 +310,19 @@ export default function CallTree() {
       return c.join(" ") || undefined;
     };
 
-    const rn = filtered.nodes.slice(0, shown).map((n) => ({
-      ...n,
-      className: cls(n),
-      data: {
-        ...n.data,
-        active: n.id === activeId,
-        hidden: collapsed.has(n.id) ? subtreeIds(n.id, treeIndex).size : 0,
-      },
-    }));
+    const rn = filtered.nodes.slice(0, shown).map((n) => {
+      const moved = dragPos.current.get(n.id);
+      return {
+        ...n,
+        position: moved ? { x: moved.x, y: moved.y } : n.position,
+        className: cls(n),
+        data: {
+          ...n.data,
+          active: n.id === activeId,
+          hidden: collapsed.has(n.id) ? subtreeIds(n.id, treeIndex).size : 0,
+        },
+      };
+    });
     const revealed = new Set(rn.map((n) => n.id));
 
     const out = [];
@@ -404,19 +422,23 @@ export default function CallTree() {
     setReveal(Infinity);
   };
 
-  const onExpand = (nid) =>
+  const onExpand = (nid) => {
+    dragPos.current.clear(); // the graph is about to be laid out again
     setCollapsed((c) => {
       const n = new Set(c);
       n.delete(nid);
       return n;
     });
+  };
 
-  const onCollapse = (nid) =>
+  const onCollapse = (nid) => {
+    dragPos.current.clear();
     setCollapsed((c) => {
       const n = new Set(c);
       n.add(nid);
       return n;
     });
+  };
 
   // hiding or revealing a branch reshapes the whole graph: recentre so the
   // tree left on screen is not stranded halfway off canvas
@@ -435,6 +457,7 @@ export default function CallTree() {
   // jumping through the breadcrumb re-opens anything collapsed in the way
   const jumpTo = useCallback(
     (nid) => {
+      if (collapsed.size) dragPos.current.clear(); // may reopen a branch
       setCollapsed((c) => {
         if (!c.size) return c;
         const next = new Set(c);
@@ -448,7 +471,7 @@ export default function CallTree() {
       });
       selectNode(nid);
     },
-    [treeIndex, selectNode],
+    [collapsed, treeIndex, selectNode],
   );
 
   const detail = useMemo(() => {
@@ -472,7 +495,7 @@ export default function CallTree() {
       <ReactFlow
         nodes={visible.nodes}
         edges={visible.edges}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesState}
         onNodeClick={onNodeClick}
         onPaneClick={() => setInfo(null)}
@@ -485,7 +508,7 @@ export default function CallTree() {
         edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
         nodesConnectable={false}
-        nodesDraggable={false}
+        nodesDraggable={true}
         deleteKeyCode={null}
         defaultEdgeOptions={{ type: "call" }}
       >
