@@ -489,7 +489,7 @@ export default function CallTree() {
         deleteKeyCode={null}
         defaultEdgeOptions={{ type: "call" }}
       >
-        <Background gap={22} size={1} color="#e8edf3" />
+        <Background variant="dots" gap={20} size={1.6} color="#cbd5e1" />
         <Controls showInteractive={false} />
         <MiniMap
           pannable
