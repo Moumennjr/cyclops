@@ -34,8 +34,22 @@ export function fmt(v) {
   return String(v);
 }
 
+// one shared geometry for layout + rendering, so nodes can never overlap and
+// every level sits on the same horizontal band
+export const NODE_W = 184;
+export const LEVEL = 152;
+export const H_GAP = 36;
+export const GROUP_GAP = 30;
+
 function frameName(frame) {
   return String((frame && frame.name) || "?");
+}
+
+// what a frame produced, short enough to pin under its own node
+function frameOutput(frame) {
+  if (!frame) return "";
+  if (frame.error) return `${frame.error.name}: ${frame.error.message}`;
+  return fmt(frame.return);
 }
 
 function escapeHtml(s) {
@@ -105,10 +119,7 @@ export function edgeIO(frame) {
   if (!frame) return { input: "()", output: "" };
   const args = Array.isArray(frame.args) ? frame.args : [];
   const input = `(${args.map(fmt).join(", ")})`;
-  if (frame.error) {
-    return { input, output: `${frame.error.name}: ${frame.error.message}`, err: true };
-  }
-  return { input, output: fmt(frame.return) };
+  return { input, output: frameOutput(frame), err: !!frame.error };
 }
 
 export function buildTreeIndex(edges) {
@@ -162,47 +173,64 @@ export function computeStats(roots) {
   return { calls, maxDepth, roots: roots.length };
 }
 
+// Deterministic tidy tree: every leaf owns a slot, a parent centres over its
+// children, sibling subtrees get an extra gutter so call groups stay visually
+// separate. Same trace in => same picture out.
 export function toFlowModel(roots, layout) {
   const nodes = [];
   const edges = [];
   const byId = new Map();
   let id = 0;
 
-  // tidy top-down placement: every leaf owns a column, parents centre over
-  // their children, so subtrees stay disjoint and branches never collide
+  const W = (layout && layout.width) || NODE_W;
+  const LV = (layout && layout.level) || LEVEL;
+  const HG = (layout && layout.gap) || H_GAP;
+  const GG = (layout && layout.groupGap) || GROUP_GAP;
+
   const pos = new Map();
-  let row = 0;
   if (layout !== null) {
-    let maxLen = 0;
-    const measure = (frames) => {
-      for (const f of frames) {
-        maxLen = Math.max(maxLen, String(f.name || "").length);
-        measure(f.children || []);
-      }
-    };
-    measure(roots);
-    const width = layout.width ?? Math.max(170, maxLen * 8 + 28);
-    const slot = layout.slot ?? width + 44;
-    const level = layout.level ?? 160;
-    let cursor = 0;
-    const assign = (frames, d) => {
-      const centres = [];
-      for (const f of frames) {
-        const kids = f.children || [];
-        let cx;
-        if (kids.length) {
-          const ks = assign(kids, d + 1);
-          cx = (ks[0] + ks[ks.length - 1]) / 2;
-        } else {
-          cx = cursor + slot / 2;
-          cursor += slot;
+    const isGroup = (f) => (f.children || []).length > 0;
+    const gapBetween = (a, b) => HG + (isGroup(a) || isGroup(b) ? GG : 0);
+    const wcache = new Map();
+    const widthOf = (f) => {
+      if (wcache.has(f)) return wcache.get(f);
+      const kids = f.children || [];
+      let w = W;
+      if (kids.length) {
+        w = 0;
+        for (let i = 0; i < kids.length; i++) {
+          if (i) w += gapBetween(kids[i - 1], kids[i]);
+          w += widthOf(kids[i]);
         }
-        pos.set(f, { x: cx - width / 2, y: d * level });
-        centres.push(cx);
+        w = Math.max(W, w);
       }
-      return centres;
+      wcache.set(f, w);
+      return w;
     };
-    assign(roots, 0);
+    const kidsWidth = (kids) => {
+      let t = 0;
+      for (let i = 0; i < kids.length; i++) {
+        if (i) t += gapBetween(kids[i - 1], kids[i]);
+        t += widthOf(kids[i]);
+      }
+      return t;
+    };
+    const place = (f, left, d) => {
+      const kids = f.children || [];
+      const cx = left + widthOf(f) / 2;
+      pos.set(f, { x: cx - W / 2, y: d * LV });
+      if (!kids.length) return;
+      let cur = cx - kidsWidth(kids) / 2;
+      for (let i = 0; i < kids.length; i++) {
+        place(kids[i], cur, d + 1);
+        cur += widthOf(kids[i]) + (i + 1 < kids.length ? gapBetween(kids[i], kids[i + 1]) : 0);
+      }
+    };
+    let cursor = 0;
+    for (const r of roots) {
+      place(r, cursor, 0);
+      cursor += widthOf(r) + HG + GG;
+    }
   }
 
   function visit(frames, parentNid, d) {
@@ -210,14 +238,42 @@ export function toFlowModel(roots, layout) {
       const nid = `n${++id}`;
       byId.set(nid, f);
       const p = pos.get(f);
-      const px = p ? p.x : row * 210;
-      const py = p ? p.y : d * 150;
+      const px = p ? p.x : row * (W + 44);
+      const py = p ? p.y : d * LV;
       if (!p) row++;
-      nodes.push({ id: nid, position: { x: px, y: py }, data: { name: String(f.name || ""), error: !!f.error, frame: f, nid } });
-      if (parentNid) edges.push({ id: `${parentNid}-${nid}`, source: parentNid, target: nid });
-      visit(f.children || [], nid, d + 1);
+      const kids = f.children || [];
+      nodes.push({
+        id: nid,
+        position: { x: px, y: py },
+        style: { width: W },
+        data: {
+          name: String(f.name || ""),
+          error: !!f.error,
+          frame: f,
+          nid,
+          depth: d,
+          parent: parentNid,
+          isRoot: !parentNid,
+          childCount: kids.length,
+          argCount: Array.isArray(f.args) ? f.args.length : 0,
+          line: f.loc && typeof f.loc.line === "number" ? f.loc.line : null,
+          output: frameOutput(f),
+        },
+      });
+      if (parentNid) {
+        edges.push({
+          id: `${parentNid}-${nid}`,
+          source: parentNid,
+          target: nid,
+          sourceHandle: "out",
+          targetHandle: "in",
+          type: "call",
+        });
+      }
+      visit(kids, nid, d + 1);
     }
   }
+  let row = 0;
   visit(roots, null, 0);
   return { nodes, edges, byId };
 }
