@@ -308,6 +308,85 @@ test("every invocation of the same function is its own frame", () => {
   );
 });
 
+test("direct recursion nests one frame per invocation", () => {
+  const src = `
+    function fact(n) { return n <= 1 ? 1 : n * fact(n - 1); }
+    fact(5);
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0);
+  assert.ok(tree, "tree captured");
+
+  const frames = findFrames(tree.roots, "fact");
+  assert.equal(frames.length, 5, "fact(5) down to fact(1)");
+  assert.deepEqual(
+    frames.map((f) => f.return),
+    [120, 24, 6, 2, 1],
+    "each level returns its own value",
+  );
+  assert.equal(new Set(frames.map((f) => f.id)).size, 5, "ids are unique per invocation");
+
+  let node = tree.roots[0];
+  let depth = 0;
+  while (node) {
+    depth++;
+    node = node.children[0];
+  }
+  assert.equal(depth, 5, "frames nest parent to child");
+});
+
+test("mutual recursion and deep recursion stay correct", () => {
+  const src = `
+    function isEven(n) { return n === 0 ? true : isOdd(n - 1); }
+    function isOdd(n) { return n === 0 ? false : isEven(n - 1); }
+    function count(n) { return n === 0 ? 0 : 1 + count(n - 1); }
+    isEven(6);
+    count(300);
+  `;
+  const { res, tree } = runTree(src);
+  assert.equal(res.status, 0);
+  assert.ok(tree, "tree captured");
+
+  assert.equal(findFrames(tree.roots, "isEven").length, 4, "isEven(6), (4), (2), (0)");
+  assert.equal(findFrames(tree.roots, "isOdd").length, 3, "isOdd(5), (3), (1)");
+  assert.equal(tree.roots[0].return, true);
+
+  let node = tree.roots[0];
+  let depth = 0;
+  while (node) {
+    depth++;
+    node = node.children[0];
+  }
+  assert.equal(depth, 7, "the two functions alternate down the chain");
+
+  const counts = findFrames(tree.roots, "count");
+  assert.equal(counts.length, 301, "count(300) down to count(0)");
+  assert.equal(counts[0].return, 300, "the outermost call returns the total");
+  assert.equal(counts[counts.length - 1].return, 0, "the base case returns 0");
+  assert.equal(new Set(counts.map((f) => f.id)).size, 301, "no id is reused at depth 300");
+});
+
+test("an error at the bottom of a recursion is recorded on every frame it crosses", () => {
+  const src = `
+    function deep(n) { if (n === 0) throw new RangeError("bottom"); return deep(n - 1); }
+    try { deep(3); } catch (e) { console.log("caught", e.message); }
+  `;
+  const { res, tree } = runTree(src);
+  assert.equal(res.status, 0, "the caller caught it, so the program survives");
+  assert.match(res.stdout, /caught bottom/, "the user's own catch still runs");
+  assert.ok(tree, "tree captured");
+
+  const frames = findFrames(tree.roots, "deep");
+  assert.equal(frames.length, 4, "deep(3) down to deep(0)");
+  for (const f of frames) {
+    assert.equal(f.error.name, "RangeError", `${f.name} propagates the error`);
+    assert.equal(f.error.message, "bottom");
+    assert.equal(fmt(f.return), "undefined", "a frame that propagated an error returns nothing");
+    assert.equal(typeof f.endedAt, "number", "the frame is closed");
+  }
+});
+
 test("escaping errors are recorded on frames and exit code is non-zero", () => {
   const src = `function a(){ b(); } function b(){ throw new Error("boom"); } a();`;
   const res = runInstrumented(src);
