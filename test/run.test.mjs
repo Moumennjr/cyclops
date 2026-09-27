@@ -817,6 +817,43 @@ test("callbacks invoked from native methods are traced on their own", () => {
     "native methods are not instrumented — only the user's code is");
 });
 
+test("closures made in a loop keep their own bindings (Phase 21)", () => {
+  const src = `
+    const log = [];
+    const perIteration = [];
+    for (let i = 0; i < 3; i++) { perIteration.push(function () { return i; }); }
+    const shared = [];
+    for (var j = 0; j < 3; j++) { shared.push(function () { return j; }); }
+    for (const f of perIteration) log.push(f());
+    for (const f of shared) log.push(f());
+    log.push((function iife() { return "iife"; })());
+    log.push((function () { return 7; })());
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify([0, 1, 2, 3, 3, 3, "iife", 7]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "let binds per iteration, var does not — as in plain JS");
+  assert.ok(tree, "tree captured");
+
+  assert.deepEqual(
+    tree.roots.map((f) => f.name),
+    ["anonymous", "anonymous", "anonymous", "anonymous", "anonymous", "anonymous", "iife", "anonymous"],
+    "each closure call and both IIFEs are frames, in call order",
+  );
+  assert.deepEqual(
+    tree.roots.map((f) => f.return),
+    [0, 1, 2, 3, 3, 3, "iife", 7],
+    "the captured bindings are the ones the program sees",
+  );
+});
+
 test("comments, ASI, unicode and odd keys survive instrumentation (Phase 29)", () => {
   const src = `#!/usr/bin/env node
     // leading comment on the file
