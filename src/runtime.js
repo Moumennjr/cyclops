@@ -46,6 +46,7 @@ function __ret(id, value) {
   if (frame) {
     frame.return = __cyc_snap(value);
     frame.endedAt = Date.now();
+    frame.duration = frame.endedAt - frame.startedAt;
     __remove(frame);
   }
   return value;
@@ -59,6 +60,7 @@ function __err(id, error) {
       message: (error && error.message) || String(error)
     };
     frame.endedAt = Date.now();
+    frame.duration = frame.endedAt - frame.startedAt;
     __remove(frame);
   }
 }

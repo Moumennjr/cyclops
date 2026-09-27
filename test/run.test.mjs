@@ -376,6 +376,61 @@ test("timestamps bracket a nested run in the order it really executed", () => {
   inOrder(top);
 });
 
+test("duration is the time between enter and exit, on every frame", () => {
+  const src = `
+    function tiny() { return 0; }
+    function work(n) { let x = 0; for (let i = 0; i < n; i++) x += i; return x; }
+    function wrap(n) { work(n); work(n); return n; }
+    tiny();
+    wrap(10000000);
+    wrap(10000000);
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0);
+  assert.ok(tree, "tree captured");
+
+  const frames = [];
+  const walk = (list) => {
+    for (const f of list) {
+      frames.push(f);
+      walk(f.children);
+    }
+  };
+  walk(tree.roots);
+  assert.equal(frames.length, 7, "tiny + 2 wraps + 4 works");
+
+  for (const f of frames) {
+    assert.equal(typeof f.duration, "number", `${f.name} records a duration`);
+    assert.equal(f.duration, f.endedAt - f.startedAt, `${f.name} duration is exit minus enter`);
+    assert.ok(f.duration >= 0, `${f.name} duration is never negative`);
+  }
+
+  for (const parent of frames) {
+    let childTotal = 0;
+    for (const child of parent.children) {
+      assert.ok(child.duration <= parent.duration, `${child.name} cannot outlive ${parent.name}`);
+      childTotal += child.duration;
+    }
+    if (childTotal) {
+      assert.ok(childTotal <= parent.duration, `${parent.name} spans everything it called`);
+    }
+  }
+
+  const works = frames.filter((f) => f.name === "work");
+  assert.equal(works.length, 4, "one work frame per call");
+  assert.ok(
+    works.some((f) => f.duration >= 1),
+    "a long-running function accumulates at least a millisecond",
+  );
+
+  const tiny = frames.find((f) => f.name === "tiny");
+  assert.ok(tiny.duration < 50, "a trivial function stays trivially short");
+
+  const wraps = frames.filter((f) => f.name === "wrap");
+  assert.equal(wraps.length, 2, "each wrap call carries its own duration");
+});
+
 test("direct recursion nests one frame per invocation", () => {
   const src = `
     function fact(n) { return n <= 1 ? 1 : n * fact(n - 1); }
