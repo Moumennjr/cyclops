@@ -319,6 +319,63 @@ test("every invocation of the same function is its own frame", () => {
   );
 });
 
+test("timestamps bracket a nested run in the order it really executed", () => {
+  const src = `
+    function leaf() { return 1; }
+    function mid() { leaf(); return 2; }
+    function top() { mid(); mid(); return 3; }
+    top();
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0);
+  assert.ok(tree, "tree captured");
+
+  const [top] = findFrames(tree.roots, "top");
+  assert.ok(top, "top traced");
+  assert.equal(top.children.length, 2, "mid called twice from top");
+  for (const mid of top.children) {
+    assert.equal(mid.children.length, 1, "each mid calls leaf once");
+  }
+
+  // every child starts after its caller started and ends before it ends
+  const bracket = (frame) => {
+    for (const child of frame.children) {
+      assert.equal(typeof frame.startedAt, "number");
+      assert.equal(typeof child.startedAt, "number");
+      assert.ok(
+        frame.startedAt <= child.startedAt,
+        `${child.name} must not start before ${frame.name}`,
+      );
+      assert.ok(
+        typeof child.endedAt === "number" && child.endedAt <= frame.endedAt,
+        `${child.name} must finish before ${frame.name}`,
+      );
+      bracket(child);
+    }
+  };
+  bracket(top);
+
+  // two calls from the same site cannot overlap
+  const [first, second] = top.children;
+  assert.ok(first.endedAt <= second.startedAt, "the second mid starts after the first finished");
+  assert.ok(
+    first.children[0].endedAt <= second.children[0].startedAt,
+    "their leaves never interleave",
+  );
+
+  // timestamps are non-decreasing down the tree
+  const inOrder = (frame) => {
+    let prev = frame.startedAt;
+    for (const child of frame.children) {
+      assert.ok(child.startedAt >= prev, "call order and timestamp order agree");
+      prev = child.startedAt;
+      inOrder(child);
+    }
+  };
+  inOrder(top);
+});
+
 test("direct recursion nests one frame per invocation", () => {
   const src = `
     function fact(n) { return n <= 1 ? 1 : n * fact(n - 1); }
