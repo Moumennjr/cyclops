@@ -1207,6 +1207,69 @@ test("timer and microtask callbacks nest under the frame that scheduled them", (
   );
 });
 
+test("promise callbacks nest under the frame that attached them", () => {
+  const src = `
+    const log = [];
+    function sink(v) { log.push(v); return v; }
+    function chain() {
+      Promise.resolve(1)
+        .then((v) => v + 1)
+        .then((v) => { sink(v); return v * 2; })
+        .catch((e) => log.push("nope"));
+      return "chained";
+    }
+    function fails() { return Promise.reject(new Error("bad")); }
+    function recovery() {
+      fails().catch((e) => { log.push("recovered:" + e.message); return "r"; });
+      return "recovery-scheduled";
+    }
+    chain();
+    recovery();
+    await new Promise((r) => setTimeout(r, 20));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["recovered:bad", 2]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  const chain = findFrame(tree.roots, "chain");
+  assert.ok(chain, "the frame that built the chain is a root");
+  assert.equal(chain.return, "chained");
+  assert.equal(chain.children.length, 2, "both then-callbacks nest under it, the never-run catch does not");
+  assert.equal(chain.children[0].return, 2, "the first callback ran with 1");
+  const second = chain.children[1];
+  assert.equal(second.return, 4, "the second callback ran with 2");
+  assert.deepEqual(
+    second.children.map((f) => f.name),
+    ["sink"],
+    "a call made inside a callback nests under that callback",
+  );
+  assert.equal(second.children[0].return, 2);
+
+  const recovery = findFrame(tree.roots, "recovery");
+  assert.ok(recovery, "the frame that attached the catch is a root");
+  assert.equal(recovery.return, "recovery-scheduled");
+  assert.deepEqual(
+    recovery.children.map((f) => f.name),
+    ["fails", "anonymous"],
+    "the rejected call and then its handler both nest under it",
+  );
+  const handler = recovery.children[1];
+  assert.equal(handler.return, "r");
+  assert.ok(
+    handler.startedAt >= recovery.endedAt,
+    "the handler runs after the scheduling frame has already closed",
+  );
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];

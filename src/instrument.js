@@ -8,6 +8,7 @@ const SCHEDULERS = new Set([
   "setImmediate",
   "queueMicrotask",
 ]);
+const PROMISE_HOOKS = new Set(["then", "catch", "finally"]);
 
 function keyName(key) {
   if (t.isIdentifier(key)) return key.name;
@@ -127,13 +128,21 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
               !callee.computed &&
               t.isIdentifier(callee.object, { name: "process" }) &&
               t.isIdentifier(callee.property, { name: "nextTick" });
-            if (!bare && !nextTick) return;
-            const first = p.node.arguments[0];
-            if (!first || t.isStringLiteral(first)) return;
-            p.node.arguments[0] = t.callExpression(t.identifier("__cb"), [
-              t.identifier(cycId),
-              first,
-            ]);
+            const promiseHook =
+              t.isMemberExpression(callee) &&
+              !callee.computed &&
+              t.isIdentifier(callee.property) &&
+              PROMISE_HOOKS.has(callee.property.name);
+            if (!bare && !nextTick && !promiseHook) return;
+            const slots = bare || nextTick ? [0] : [0, 1];
+            for (const i of slots) {
+              const arg = p.node.arguments[i];
+              if (!arg || t.isStringLiteral(arg)) continue;
+              p.node.arguments[i] = t.callExpression(t.identifier("__cb"), [
+                t.identifier(cycId),
+                arg,
+              ]);
+            }
           },
         });
 
