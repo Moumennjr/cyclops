@@ -764,6 +764,54 @@ test("closures and higher-order functions are traced", () => {
   );
 });
 
+test("getters, setters and this-carrying methods are traced", () => {
+  const src = `
+    const log = [];
+    const counter = {
+      n: 0,
+      get value() { return this.n; },
+      set value(v) { this.n = v; },
+      add(by) { this.n += by; return this.n; },
+      double: function () { return this.add(this.n); },
+    };
+    counter.value = 5;
+    log.push(counter.value);
+    log.push(counter.add(3));
+    log.push(counter.value);
+    log.push(counter.double());
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify([5, 8, 8, 16]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "accessors must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  assert.deepEqual(
+    tree.roots.map((f) => f.name),
+    ["value", "value", "add", "value", "double"],
+    "setter, getter, method, getter, method — in the order they ran",
+  );
+
+  const roots = tree.roots;
+  assert.equal(fmt(roots[0].return), "undefined", "a setter returns nothing");
+  assert.equal(roots[1].return, 5, "the getter reads through this");
+  assert.equal(roots[2].return, 8, "the method mutates through this");
+  assert.equal(roots[3].return, 8, "and the getter sees the mutation");
+  assert.equal(roots[4].return, 16, "a method stored as a property still carries this");
+
+  const double = roots[4];
+  assert.equal(double.children.length, 1, "this.add() nests under the caller");
+  assert.equal(double.children[0].name, "add", "the nested call keeps its method name");
+  assert.equal(double.children[0].return, 16);
+});
+
 test("try/catch/finally inside a traced function keeps JS semantics", () => {
   const src = `
     const log = [];
