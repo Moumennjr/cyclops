@@ -19,6 +19,7 @@ ${snapshotBody}
 const __cyc_stack = [];
 const __cyc_roots = [];
 const __cyc_frames = new Map();
+const __cyc_suspended = new Set();
 let __cyc_nextId = 1;
 
 function __enter(name, args, loc) {
@@ -33,7 +34,13 @@ function __enter(name, args, loc) {
     startedAt: Date.now(),
     endedAt: null
   };
-  const parent = __cyc_stack[__cyc_stack.length - 1];
+  let parent = null;
+  for (let i = __cyc_stack.length - 1; i >= 0; i--) {
+    if (!__cyc_suspended.has(__cyc_stack[i].id)) {
+      parent = __cyc_stack[i];
+      break;
+    }
+  }
   if (parent) parent.children.push(frame);
   else __cyc_roots.push(frame);
   __cyc_stack.push(frame);
@@ -41,9 +48,22 @@ function __enter(name, args, loc) {
   return frame.id;
 }
 
+function __sus(id, value) {
+  const frame = __find(id);
+  if (frame) __cyc_suspended.add(id);
+  return value;
+}
+
+function __resume(id, value) {
+  const frame = __find(id);
+  if (frame) __cyc_suspended.delete(id);
+  return value;
+}
+
 function __ret(id, value) {
   const frame = __find(id);
   if (frame) {
+    __cyc_suspended.delete(id);
     frame.return = __cyc_snap(value);
     frame.endedAt = Date.now();
     frame.duration = frame.endedAt - frame.startedAt;
@@ -55,6 +75,7 @@ function __ret(id, value) {
 function __err(id, error) {
   const frame = __find(id);
   if (frame) {
+    __cyc_suspended.delete(id);
     frame.error = {
       name: (error && error.name) || "Error",
       message: (error && error.message) || String(error)

@@ -97,17 +97,25 @@ function runCli(fixture, args = []) {
   return { res, tree };
 }
 
-test("transform instruments sync functions, skips async with warning", () => {
+test("transform instruments sync and async functions, skips generators", () => {
   const { code, warnings } = transform(
-    `function f(a){ return a + 1; } async function g(){}`,
+    `function f(a){ return a + 1; } async function g(a){ return await h(a); } function* i(){} async function* j(){}`,
     { filename: "x.js" },
   );
   assert.match(code, /__enter\("f"/);
   assert.match(code, /__ret\(_cyc, a \+ 1\)/);
-  assert.ok(!code.includes('__enter("g"'));
-  assert.equal(warnings.length, 1);
-  assert.equal(warnings[0].name, "g");
-  assert.equal(warnings[0].reason, "async function");
+  assert.match(code, /__enter\("g"/);
+  assert.match(code, /__ret\(_cyc2, __resume\(_cyc2, await __sus\(_cyc2, h\(a\)\)\)\)/);
+  assert.ok(!code.includes('__enter("i"'), "generators are still skipped");
+  assert.ok(!code.includes('__enter("j"'), "async generators are still skipped");
+  assert.deepEqual(
+    warnings.map((w) => w.reason),
+    ["generator function", "async generator function"],
+  );
+  assert.deepEqual(
+    warnings.map((w) => w.name),
+    ["i", "j"],
+  );
 });
 
 test("runtime builds a correct nested tree from executed code", () => {
@@ -1035,6 +1043,122 @@ test("a mixed synchronous program traces correctly end to end (Phase 30)", () =>
   assert.ok(findFrame(tree.roots, "size"), "the getter is a frame");
   assert.equal(findFrame(tree.roots, "report").return, "a=1;b=2;");
   assert.equal(findFrame(tree.roots, "slow").return, 8);
+});
+
+test("async functions are traced across their awaits", () => {
+  const src = `
+    const log = [];
+    function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+    function marker() { log.push("marker"); return "m"; }
+    async function load(name) {
+      await sleep(30);
+      log.push("ready:" + name);
+      return name.toUpperCase();
+    }
+    async function main() {
+      const pending = load("one");
+      marker();
+      const value = await pending;
+      log.push("got:" + value);
+      return value + "!";
+    }
+    main().then((v) => log.push("done:" + v));
+    await sleep(80);
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["marker", "ready:one", "got:ONE", "done:ONE!"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "async functions must not be skipped any more");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  const main = findFrame(tree.roots, "main");
+  assert.ok(main, "the async entry point is a frame");
+  assert.equal(main.return, "ONE!");
+  assert.deepEqual(
+    main.children.map((f) => f.name),
+    ["load", "marker"],
+    "the caller keeps running while load is suspended — its call nests under the caller, not under load",
+  );
+
+  const load = findFrame(main.children, "load");
+  assert.ok(load, "the awaited call is a child of its caller");
+  assert.equal(load.return, "ONE");
+  assert.ok(load.duration >= 30, "the frame spans the await instead of closing at the first suspension");
+  assert.ok(
+    tree.roots.every((f) => f.name !== "load"),
+    "load never appears at the top level",
+  );
+
+  const all = [];
+  (function walk(frames) {
+    for (const f of frames) { all.push(f); walk(f.children); }
+  })(tree.roots);
+  for (const f of all) {
+    assert.equal(typeof f.endedAt, "number", `${f.name} closed`);
+    assert.equal(f.error, null, `${f.name} did not see an error`);
+  }
+  const callback = tree.roots.find((f) => f.name === "anonymous");
+  assert.ok(
+    callback,
+    "the .then callback runs later, with no instrumented frame below it, so it is a root",
+  );
+  assert.equal(callback.return, 4, "it ran last, after the log already held three entries");
+});
+
+test("a rejected await records the error on every frame it crosses", () => {
+  const src = `
+    const log = [];
+    function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+    function describe(e) { return e.name + "/" + e.message; }
+    async function fails() {
+      await sleep(20);
+      throw new Error("nope");
+    }
+    async function caller() {
+      try {
+        await fails();
+        return "never";
+      } catch (e) {
+        return "caught:" + describe(e);
+      }
+    }
+    caller().then((v) => log.push(v));
+    await sleep(60);
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["caught:Error/nope"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "async functions must not be skipped any more");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  const fails = findFrame(tree.roots, "fails");
+  assert.ok(fails, "the rejected async call is a frame");
+  assert.deepEqual(fails.error, { name: "Error", message: "nope" }, "the rejection is recorded");
+  assert.equal(typeof fails.duration, "number", "and the frame still closed");
+
+  const caller = findFrame(tree.roots, "caller");
+  assert.ok(caller, "the awaiting caller is a frame");
+  assert.equal(caller.error, null, "the caller caught it, so it is not its error");
+  assert.equal(caller.return, "caught:Error/nope");
+  assert.deepEqual(
+    caller.children.map((f) => f.name),
+    ["fails", "describe"],
+    "code in the user's catch still nests under the suspended frame",
+  );
 });
 
 test("loops, labels and switches add no frames and keep semantics", () => {

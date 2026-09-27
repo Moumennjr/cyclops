@@ -1,6 +1,7 @@
 import * as t from "@babel/types";
 
 const processed = new WeakSet();
+const awaited = new WeakSet();
 
 function keyName(key) {
   if (t.isIdentifier(key)) return key.name;
@@ -48,9 +49,9 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
         if (processed.has(path.node)) return;
         processed.add(path.node);
 
-        if (path.node.async || path.node.generator) {
+        if (path.node.generator) {
           warnings.push({
-            reason: path.node.async ? "async function" : "generator function",
+            reason: path.node.async ? "async generator function" : "generator function",
             name: functionName(path),
             line: path.node.loc ? path.node.loc.start.line : null,
             file: filename,
@@ -67,12 +68,18 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
         const cycId = path.scope.generateUid("cyc");
         const name = functionName(path);
         const line = path.node.loc ? path.node.loc.start.line : null;
+        const isAsync = !!path.node.async;
 
         if (isArrowExpr) {
           path.node.body = t.blockStatement([
             t.returnStatement(path.node.body),
           ]);
         }
+
+        const unsuspend = () =>
+          t.expressionStatement(
+            t.callExpression(t.identifier("__resume"), [t.identifier(cycId)]),
+          );
 
         path.traverse({
           Function(p) {
@@ -83,6 +90,28 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
               t.identifier(cycId),
               p.node.argument ? p.node.argument : t.identifier("undefined"),
             ]);
+          },
+          AwaitExpression(p) {
+            if (awaited.has(p.node)) return;
+            awaited.add(p.node);
+            const susp = t.callExpression(t.identifier("__sus"), [
+              t.identifier(cycId),
+              p.node.argument,
+            ]);
+            const wrappedAwait = t.awaitExpression(susp);
+            awaited.add(wrappedAwait);
+            p.replaceWith(
+              t.callExpression(t.identifier("__resume"), [
+                t.identifier(cycId),
+                wrappedAwait,
+              ]),
+            );
+          },
+          CatchClause(p) {
+            if (isAsync) p.node.body.body.unshift(unsuspend());
+          },
+          TryStatement(p) {
+            if (isAsync && p.node.finalizer) p.node.finalizer.body.unshift(unsuspend());
           },
         });
 
