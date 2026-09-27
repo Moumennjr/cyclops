@@ -270,6 +270,44 @@ test("a function ending in throw records the error instead of a return", () => {
   assert.ok(always.endedAt, "the frame is still closed when it throws");
 });
 
+test("every invocation of the same function is its own frame", () => {
+  const src = `
+    function tag(n) { return "v" + n; }
+    tag(1);
+    tag(2);
+    tag(3);
+  `;
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0);
+  assert.ok(tree, "tree captured");
+  assert.equal(tree.roots.length, 3, "one root frame per call");
+
+  const frames = findFrames(tree.roots, "tag");
+  assert.equal(frames.length, 3);
+  assert.deepEqual(frames.map((f) => f.return), ["v1", "v2", "v3"], "returns belong to their own call");
+
+  const ids = frames.map((f) => f.id);
+  assert.equal(new Set(ids).size, 3, "each invocation gets its own id");
+  assert.deepEqual(ids, [...ids].sort((a, b) => a - b), "ids are minted in call order");
+
+  for (const f of frames) {
+    assert.equal(typeof f.startedAt, "number", "frame records when it started");
+    assert.equal(typeof f.endedAt, "number", "frame records when it ended");
+    assert.ok(f.endedAt >= f.startedAt, "the frame is closed before it is written out");
+  }
+  assert.deepEqual(
+    frames.map((f) => f.startedAt),
+    [...frames.map((f) => f.startedAt)].sort((a, b) => a - b),
+    "call timestamps never go backwards",
+  );
+  assert.deepEqual(
+    frames.map((f) => f.children.length),
+    [0, 0, 0],
+    "a leaf call stays a leaf no matter how often it runs",
+  );
+});
+
 test("escaping errors are recorded on frames and exit code is non-zero", () => {
   const src = `function a(){ b(); } function b(){ throw new Error("boom"); } a();`;
   const res = runInstrumented(src);
