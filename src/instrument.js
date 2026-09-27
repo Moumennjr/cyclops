@@ -2,6 +2,8 @@ import * as t from "@babel/types";
 
 const processed = new WeakSet();
 const awaited = new WeakSet();
+const forAwait = new WeakSet();
+const retWrapped = new WeakSet();
 const SCHEDULERS = new Set([
   "setTimeout",
   "setInterval",
@@ -93,6 +95,8 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
             p.skip();
           },
           ReturnStatement(p) {
+            if (retWrapped.has(p.node)) return;
+            retWrapped.add(p.node);
             p.node.argument = t.callExpression(t.identifier("__ret"), [
               t.identifier(cycId),
               p.node.argument ? p.node.argument : t.identifier("undefined"),
@@ -113,6 +117,18 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
                 wrappedAwait,
               ]),
             );
+          },
+          ForOfStatement(p) {
+            if (!p.node.await || forAwait.has(p.node)) return;
+            forAwait.add(p.node);
+            p.node.right = t.callExpression(t.identifier("__aiter"), [
+              t.identifier(cycId),
+              p.node.right,
+            ]);
+            const loopBody = p.node.body;
+            if (t.isBlockStatement(loopBody)) loopBody.body.unshift(unsuspend());
+            else p.node.body = t.blockStatement([unsuspend(), loopBody]);
+            p.insertAfter(unsuspend());
           },
           CatchClause(p) {
             if (isAsync) p.node.body.body.unshift(unsuspend());

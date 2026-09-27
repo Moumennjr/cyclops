@@ -77,6 +77,51 @@ function __cb(id, fn) {
   };
 }
 
+function __aiter(id, iterable) {
+  if (iterable == null) return iterable;
+  const asyncMethod = iterable[Symbol.asyncIterator];
+  const syncMethod = iterable[Symbol.iterator];
+  if (typeof asyncMethod !== "function" && typeof syncMethod !== "function") {
+    return iterable;
+  }
+  const isSync = typeof asyncMethod !== "function";
+  const inner = (isSync ? syncMethod : asyncMethod).call(iterable);
+  if (inner == null || typeof inner.next !== "function") return iterable;
+  const wrapped = {
+    next: function () {
+      const args = arguments;
+      if (!isSync) {
+        const step = inner.next.apply(inner, args);
+        __sus(id, undefined);
+        return step;
+      }
+      let step;
+      try {
+        step = inner.next.apply(inner, args);
+      } catch (e) {
+        __sus(id, undefined);
+        return Promise.reject(e);
+      }
+      __sus(id, undefined);
+      return Promise.resolve(step.value).then(function (value) {
+        return { value: value, done: step.done };
+      });
+    },
+  };
+  if (typeof inner.return === "function") {
+    wrapped.return = function () {
+      const result = inner.return.apply(inner, arguments);
+      __sus(id, undefined);
+      return Promise.resolve(result).then(
+        function (v) { __resume(id, undefined); return v; },
+        function (e) { __resume(id, undefined); throw e; }
+      );
+    };
+  }
+  wrapped[Symbol.asyncIterator] = function () { return wrapped; };
+  return wrapped;
+}
+
 function __ret(id, value) {
   const frame = __find(id);
   if (frame) {

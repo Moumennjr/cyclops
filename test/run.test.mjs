@@ -1351,6 +1351,133 @@ test("a mixed asynchronous program traces correctly end to end", () => {
   );
 });
 
+test("for await pulls nest under the looping frame", () => {
+  const src = `
+    const log = [];
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    function items() {
+      let i = 0;
+      const iterator = {
+        next() {
+          return sleep(10).then(() =>
+            i < 3 ? { value: i++, done: false } : { done: true },
+          );
+        },
+      };
+      return {
+        [Symbol.asyncIterator]: function start() { return iterator; },
+      };
+    }
+    function helper(v) { log.push("h" + v); return v; }
+    function afterLoop(n) { log.push("after:" + n); return n; }
+    function concurrent() { log.push("concurrent"); return "c"; }
+    async function iterate() {
+      let total = 0;
+      for await (const v of items()) { total += helper(v); }
+      afterLoop(total);
+      return total;
+    }
+    iterate().then((n) => log.push("done:" + n));
+    concurrent();
+    await sleep(80);
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["concurrent", "h0", "h1", "h2", "after:3", "done:3"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "async functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  const iterate = findFrame(tree.roots, "iterate");
+  assert.ok(iterate, "the looping call is a root");
+  assert.equal(iterate.return, 3);
+
+  const names = iterate.children.map((f) => f.name);
+  assert.deepEqual(
+    names.filter((n) => n === "helper"),
+    ["helper", "helper", "helper"],
+    "the loop body runs inside the looping frame",
+  );
+  assert.equal(names.filter((n) => n === "next").length, 4, "three values plus the done pull");
+  assert.equal(names[names.length - 1], "afterLoop", "the code after the loop nests under it too");
+  assert.ok(
+    !names.includes("concurrent"),
+    "a call made while the loop is pulling does not nest under the suspended frame",
+  );
+
+  const helpers = iterate.children.filter((f) => f.name === "helper");
+  assert.deepEqual(helpers.map((f) => f.return), [0, 1, 2]);
+  assert.equal(findFrame(tree.roots, "concurrent").return, "c", "and that call is a root");
+});
+
+test("for await adopts sync values and closes the iterator on break", () => {
+  const src = `
+    const log = [];
+    function tag(v) { log.push("t" + v); return v; }
+    function after(msg) { log.push(msg); return msg; }
+    function openable() {
+      let i = 0;
+      return {
+        [Symbol.iterator]: function symbols() {
+          return {
+            next() { return i < 5 ? { value: i++, done: false } : { done: true }; },
+            return() { log.push("closed"); return { done: true }; },
+          };
+        },
+      };
+    }
+    async function scan() {
+      let seen = 0;
+      for await (const v of [Promise.resolve(1), 2, Promise.resolve(3)]) {
+        seen += 1;
+        if (seen === 2) break;
+        tag(v);
+      }
+      after("a:" + seen);
+      for await (const v of openable()) {
+        seen += 1;
+        if (seen > 2) break;
+      }
+      after("b:" + seen);
+      return seen;
+    }
+    scan().then((n) => log.push("done:" + n));
+    await new Promise((r) => setTimeout(r, 30));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["t1", "a:2", "closed", "b:3", "done:3"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "async functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "promise values are adopted, the iterator is closed");
+  assert.ok(tree, "tree captured");
+
+  const scan = findFrame(tree.roots, "scan");
+  assert.ok(scan, "the scanning call is a root");
+  assert.equal(scan.return, 3);
+
+  const names = scan.children.map((f) => f.name);
+  assert.deepEqual(names.filter((n) => n === "tag"), ["tag"], "only the first value was tagged");
+  assert.deepEqual(
+    names.filter((n) => n === "after"),
+    ["after", "after"],
+    "the code after each loop nests under the scanning frame",
+  );
+  assert.ok(names.includes("openable"), "the iterable factory is traced");
+  assert.ok(names.includes("return"), "the close call nests under the loop too");
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];
