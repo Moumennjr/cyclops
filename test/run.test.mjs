@@ -816,6 +816,53 @@ test("callbacks invoked from native methods are traced on their own", () => {
     "native methods are not instrumented — only the user's code is");
 });
 
+test("loops, labels and switches add no frames and keep semantics", () => {
+  const src = `
+    const log = [];
+    function tick(n) { return n * 2; }
+    let acc = 0;
+    for (let i = 0; i < 5; i++) { if (i === 2) continue; acc += tick(i); }
+    while (acc > 10) { acc -= 3; }
+    do { acc++; } while (acc < 12);
+    for (const v of [1, 2, 3]) { acc += v; }
+    const seen = [];
+    for (const k in { a: 1, b: 2 }) seen.push(k);
+    outer: for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        if (j === 1) continue outer;
+        if (i === 2) break outer;
+        log.push(i + ":" + j);
+      }
+    }
+    switch (acc % 3) {
+      case 0: log.push("div3:" + acc); break;
+      case 1: log.push("one:" + acc); break;
+      default: log.push("other:" + acc);
+    }
+    log.push(seen.join("-"));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["0:0", "1:0", "div3:18", "a-b"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "every loop, label and switch really ran");
+  assert.ok(tree, "tree captured");
+
+  const all = [];
+  (function walk(frames) {
+    for (const f of frames) { all.push(f); walk(f.children); }
+  })(tree.roots);
+  assert.equal(all.length, 4, "control flow is not a frame — only the calls are");
+  assert.deepEqual(all.map((f) => f.name), ["tick", "tick", "tick", "tick"]);
+  assert.deepEqual(all.map((f) => f.return), [0, 2, 6, 8], "the skipped iteration really skipped");
+});
+
 test("getters, setters and this-carrying methods are traced", () => {
   const src = `
     const log = [];
