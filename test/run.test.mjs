@@ -764,6 +764,58 @@ test("closures and higher-order functions are traced", () => {
   );
 });
 
+test("callbacks invoked from native methods are traced on their own", () => {
+  const src = `
+    const log = [];
+    function isActive(u) { return u.age >= 18; }
+    function label(u) { return u.name.toUpperCase(); }
+    const users = [
+      { name: "al", age: 30 },
+      { name: "bo", age: 12 },
+      { name: "cy", age: 21 },
+    ];
+    const adults = users.filter(isActive);
+    log.push(adults.length);
+    log.push(adults.map(label).join(","));
+    log.push(users.reduce((sum, u) => sum + u.age, 0));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify([2, "AL,CY", 63]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync callbacks must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  assert.deepEqual(
+    tree.roots.map((f) => f.name),
+    ["isActive", "isActive", "isActive", "label", "label", "anonymous", "anonymous", "anonymous"],
+    "one frame per callback invocation, in call order",
+  );
+  assert.deepEqual(
+    tree.roots.slice(0, 3).map((f) => f.return),
+    [true, false, true],
+    "filter runs the predicate once per element",
+  );
+  assert.deepEqual(
+    tree.roots.slice(5).map((f) => f.return),
+    [30, 42, 63],
+    "the reduce callback carries its accumulator between calls",
+  );
+  assert.ok(
+    tree.roots.every((f) => f.children.length === 0),
+    "native methods are not frames, so the callbacks hang from the top",
+  );
+  const names = new Set(tree.roots.map((f) => f.name));
+  assert.ok(!names.has("filter") && !names.has("map") && !names.has("reduce"),
+    "native methods are not instrumented — only the user's code is");
+});
+
 test("getters, setters and this-carrying methods are traced", () => {
   const src = `
     const log = [];
