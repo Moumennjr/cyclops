@@ -812,6 +812,72 @@ test("getters, setters and this-carrying methods are traced", () => {
   assert.equal(double.children[0].return, 16);
 });
 
+test("classes, inheritance, super and private methods are traced", () => {
+  const src = `
+    const log = [];
+    class Animal {
+      constructor(name) { this.name = name; }
+      speak() { return this.name + " makes a sound"; }
+      static kind() { return "animal"; }
+      #tag() { return "tag:" + this.name; }
+      describe() { return this.#tag(); }
+    }
+    class Dog extends Animal {
+      constructor(name) { super(name); this.legs = 4; }
+      speak() { return super.speak() + " (woof)"; }
+      describe() { return super.describe() + "/" + this.legs; }
+    }
+    const d = new Dog("rex");
+    log.push(d.speak());
+    log.push(d.describe());
+    log.push(Animal.kind());
+    log.push(Dog.kind());
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify([
+    "rex makes a sound (woof)",
+    "tag:rex/4",
+    "animal",
+    "animal",
+  ]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "class members must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "and inheritance really works");
+  assert.ok(tree, "tree captured");
+
+  assert.deepEqual(
+    tree.roots.map((f) => f.name),
+    ["constructor", "speak", "describe", "kind", "kind"],
+    "constructing and each top-level call is a root, in call order",
+  );
+
+  const ctor = tree.roots[0];
+  assert.equal(ctor.children.length, 1, "super() runs the base constructor inside the derived one");
+  assert.equal(ctor.children[0].name, "constructor");
+
+  const speak = tree.roots[1];
+  assert.equal(speak.children.length, 1, "super.speak() nests under the overriding method");
+  assert.equal(speak.children[0].name, "speak");
+  assert.equal(speak.children[0].return, "rex makes a sound");
+
+  const describe = tree.roots[2];
+  assert.equal(describe.children.length, 1, "super.describe() nests under the override");
+  const base = describe.children[0];
+  assert.equal(base.name, "describe");
+  assert.equal(base.children.length, 1, "and the private method it calls nests under it");
+  assert.equal(base.children[0].name, "#tag", "a private method is named with its private name");
+  assert.equal(base.children[0].return, "tag:rex");
+
+  assert.equal(tree.roots[3].return, "animal");
+  assert.equal(tree.roots[4].return, "animal", "a static method called through a subclass still runs");
+});
+
 test("try/catch/finally inside a traced function keeps JS semantics", () => {
   const src = `
     const log = [];

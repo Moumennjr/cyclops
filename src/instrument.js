@@ -5,7 +5,7 @@ const processed = new WeakSet();
 function keyName(key) {
   if (t.isIdentifier(key)) return key.name;
   if (t.isStringLiteral(key)) return key.value;
-  if (t.isPrivateName(key)) return key.id.name;
+  if (t.isPrivateName(key)) return "#" + key.id.name;
   return "anonymous";
 }
 
@@ -13,7 +13,8 @@ function functionName(path) {
   const node = path.node;
   if (node.id && t.isIdentifier(node.id)) return node.id.name;
 
-  if (path.isObjectMethod() || path.isClassMethod()) return keyName(node.key);
+  if (path.isObjectMethod() || path.isClassMethod() || path.isClassPrivateMethod())
+    return keyName(node.key);
 
   const parent = path.parentPath;
   if (parent.isVariableDeclarator() && t.isIdentifier(parent.node.id))
