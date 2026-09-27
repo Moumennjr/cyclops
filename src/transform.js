@@ -9,6 +9,7 @@ export function transform(
 ) {
   const warnings = [];
   const ast = parse(source, { sourceType, errorRecovery: false });
+  ast.program.interpreter = null;
   traverse(ast, instrument({ warnings, filename }).visitor);
   const { code } = generate(ast, { comments: true });
   return { code, warnings };

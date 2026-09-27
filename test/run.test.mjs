@@ -817,6 +817,51 @@ test("callbacks invoked from native methods are traced on their own", () => {
     "native methods are not instrumented — only the user's code is");
 });
 
+test("comments, ASI, unicode and odd keys survive instrumentation (Phase 29)", () => {
+  const src = `#!/usr/bin/env node
+    // leading comment on the file
+    /* leading comment on the function */
+    function /* inline */ quoted() { return "ok"; }
+    const weird = {
+      "not-an-identifier"() { return 1; },
+      鍵() { return 2; },
+    };
+    function asI() {
+      const n = 1
+      if (n) return n
+      return 0
+    }
+    function español(ñ) { return ñ + 1 }
+    export default function def() { return "d"; }
+    console.log(JSON.stringify([
+      quoted(),
+      weird["not-an-identifier"](),
+      weird["鍵"](),
+      asI(),
+      español(1),
+      def(),
+    ]));
+  `;
+  const expected = JSON.stringify(["ok", 1, 2, 1, 2, "d"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  assert.deepEqual(
+    tree.roots.map((f) => f.name),
+    ["quoted", "not-an-identifier", "鍵", "asI", "español", "def"],
+    "odd keys, unicode names and a default export all keep the name they answer to",
+  );
+  assert.equal(findFrame(tree.roots, "quoted").return, "ok", "comments in the source do not disturb it");
+});
+
 test("the directive prologue of an instrumented function is kept (Phase 29)", () => {
   const src = `
     "use strict";
