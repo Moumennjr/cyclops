@@ -863,6 +863,76 @@ test("loops, labels and switches add no frames and keep semantics", () => {
   assert.deepEqual(all.map((f) => f.return), [0, 2, 6, 8], "the skipped iteration really skipped");
 });
 
+test("modern syntax still parses, runs and traces (Phase 27)", () => {
+  const src = `
+    const log = [];
+    function pick({ id, meta: { tag = "none" } = {} }, ...rest) {
+      return id + "/" + tag + "/" + rest.length;
+    }
+    function elvis(o) { return o?.deep?.value ?? "fallback"; }
+    function spreadCall(...args) { return args.join("+"); }
+    const Pow = (a, b) => a ** b;
+    function templates(n) { return "v=" + n; }
+    function defaults(store) {
+      store.a ??= 1;
+      store.b ||= 2;
+      store.c &&= 3;
+      return JSON.stringify(store);
+    }
+    class Counter {
+      #n = 0;
+      static tag = "ctr";
+      bump() { this.#n++; return this.#n; }
+    }
+    log.push(pick({ id: 1 }, 7, 8));
+    log.push(pick({ id: 2, meta: { tag: "t" } }, 9));
+    log.push(elvis({}));
+    log.push(elvis({ deep: { value: 0 } }));
+    log.push(spreadCall(...[1, 2, 3]));
+    log.push(Pow(2, 10));
+    log.push(templates("x"));
+    log.push(defaults({ b: 9 }));
+    const c = new Counter();
+    c.bump();
+    log.push(c.bump() + "/" + Counter.tag);
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify([
+    "1/none/2",
+    "2/t/1",
+    "fallback",
+    0,
+    "1+2+3",
+    1024,
+    "v=x",
+    '{"b":9,"a":1}',
+    "2/ctr",
+  ]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "sync functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  assert.deepEqual(
+    tree.roots.map((f) => f.name),
+    ["pick", "pick", "elvis", "elvis", "spreadCall", "Pow", "templates", "defaults", "bump", "bump"],
+    "every call is a frame, in call order",
+  );
+  assert.deepEqual(
+    tree.roots[0].args,
+    [1, "none", [7, 8]],
+    "each binding of the destructured pattern, then the rest",
+  );
+  assert.deepEqual(tree.roots[1].args, [2, "t", [9]], "an explicit value beats the default");
+  assert.equal(tree.roots[8].return, 1, "a private field survives the wrapping");
+});
+
 test("getters, setters and this-carrying methods are traced", () => {
   const src = `
     const log = [];
