@@ -1518,6 +1518,46 @@ test("continue and return inside for await keep the frame correct", () => {
   assert.ok(!names.includes("after"), "code after the loop never ran");
 });
 
+test("for await inside a branch and a labelled loop still nests correctly", () => {
+  const src = `
+    const log = [];
+    function tag(v) { log.push("t" + v); return v; }
+    function after(n) { log.push("after:" + n); return n; }
+    async function walk(flag) {
+      let n = 0;
+      if (flag) for await (const v of [1, 2]) n += tag(v);
+      outer: for await (const v of [10, 20, 30]) {
+        if (v === 20) continue outer;
+        n += tag(v);
+      }
+      after(n);
+      return n;
+    }
+    walk(true).then((x) => log.push("done:" + x));
+    await new Promise((r) => setTimeout(r, 30));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["t1", "t2", "t10", "t30", "after:43", "done:43"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "async functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  const walk = findFrame(tree.roots, "walk");
+  assert.ok(walk, "the walking call is a root");
+  assert.equal(walk.return, 43);
+
+  const names = walk.children.map((f) => f.name);
+  assert.equal(names.filter((n) => n === "tag").length, 4, "both loops ran their bodies inside the frame");
+  assert.equal(names[names.length - 1], "after", "the resume after the unbraced branch and the label ran");
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];
