@@ -1558,6 +1558,59 @@ test("for await inside a branch and a labelled loop still nests correctly", () =
   assert.equal(names[names.length - 1], "after", "the resume after the unbraced branch and the label ran");
 });
 
+test("a rejecting pull lands in the surrounding catch and resumes the frame", () => {
+  const src = `
+    const log = [];
+    function boom() { log.push("boom"); return "caught"; }
+    function after(n) { log.push("after:" + n); return n; }
+    async function flaky() {
+      const bad = {
+        [Symbol.asyncIterator]: function start() {
+          return {
+            next() { return Promise.reject(new Error("pull failed")); },
+          };
+        },
+      };
+      let n = 0;
+      try {
+        for await (const v of bad) { n += 1; }
+        log.push("no-error");
+      } catch (e) {
+        boom();
+      }
+      after(n);
+      return n;
+    }
+    flaky().then((x) => log.push("done:" + x));
+    await new Promise((r) => setTimeout(r, 30));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["boom", "after:0", "done:0"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "async functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "the rejection was caught, not swallowed");
+  assert.ok(tree, "tree captured");
+
+  const flaky = findFrame(tree.roots, "flaky");
+  assert.ok(flaky, "the looping call is a root");
+  assert.equal(flaky.return, 0);
+
+  const names = flaky.children.map((f) => f.name);
+  assert.ok(names.includes("start"), "the iterator factory is traced");
+  assert.ok(names.includes("boom"), "the catch body nests under the looping frame");
+  assert.equal(
+    names[names.length - 1],
+    "after",
+    "the frame resumed after the rejection, so the code after the catch still nests under it",
+  );
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];
