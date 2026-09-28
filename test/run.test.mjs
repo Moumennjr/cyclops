@@ -1478,6 +1478,46 @@ test("for await adopts sync values and closes the iterator on break", () => {
   assert.ok(names.includes("return"), "the close call nests under the loop too");
 });
 
+test("continue and return inside for await keep the frame correct", () => {
+  const src = `
+    const log = [];
+    function tag(v) { log.push("t" + v); return v; }
+    function after(n) { log.push("after:" + n); return n; }
+    async function pick() {
+      let total = 0;
+      for await (const v of [1, 2, 3, 4, 5]) {
+        if (v % 2 === 0) continue;
+        total += tag(v);
+        if (total >= 4) return total;
+      }
+      after(total);
+      return -1;
+    }
+    pick().then((n) => log.push("done:" + n));
+    await new Promise((r) => setTimeout(r, 30));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["t1", "t3", "done:4"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "async functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "the early return left the loop");
+  assert.ok(tree, "tree captured");
+
+  const pick = findFrame(tree.roots, "pick");
+  assert.ok(pick, "the looping call is a root");
+  assert.equal(pick.return, 4, "the frame closed with the early return value");
+
+  const names = pick.children.map((f) => f.name);
+  assert.deepEqual(names.filter((n) => n === "tag"), ["tag", "tag"], "continued values skipped the body");
+  assert.ok(!names.includes("after"), "code after the loop never ran");
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];
