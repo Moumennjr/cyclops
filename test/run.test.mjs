@@ -1611,6 +1611,52 @@ test("a rejecting pull lands in the surrounding catch and resumes the frame", ()
   );
 });
 
+test("an await inside the loop body suspends and resumes the same frame", () => {
+  const src = `
+    const log = [];
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    function step(v) { log.push("s" + v); return v; }
+    async function stream() {
+      let n = 0;
+      for await (const v of [10, 20, 30]) {
+        await sleep(5);
+        n += step(v);
+      }
+      return n;
+    }
+    stream().then((x) => log.push("done:" + x));
+    await new Promise((r) => setTimeout(r, 60));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["s10", "s20", "s30", "done:60"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "async functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n");
+  assert.ok(tree, "tree captured");
+
+  const stream = findFrame(tree.roots, "stream");
+  assert.ok(stream, "the streaming call is a root");
+  assert.equal(stream.return, 60);
+
+  const names = stream.children.map((f) => f.name);
+  assert.deepEqual(
+    names.filter((n) => n === "step"),
+    ["step", "step", "step"],
+    "every awaited body still runs inside the looping frame",
+  );
+  assert.equal(
+    names.filter((n) => n === "sleep").length,
+    3,
+    "the sleep inside each iteration nests under the looping frame too",
+  );
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];
