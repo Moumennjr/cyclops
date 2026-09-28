@@ -1657,6 +1657,47 @@ test("an await inside the loop body suspends and resumes the same frame", () => 
   );
 });
 
+test("for await over a skipped async generator still traces the loop", () => {
+  const src = `
+    const log = [];
+    function note(v) { log.push("n" + v); return v; }
+    async function* count() {
+      yield 1;
+      yield 2;
+    }
+    async function drive() {
+      let n = 0;
+      for await (const v of count()) n += note(v);
+      return n;
+    }
+    drive().then((x) => log.push("done:" + x));
+    await new Promise((r) => setTimeout(r, 30));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["n1", "n2", "done:3"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.equal(warnings.length, 1, "the generator itself is skipped with one warning");
+  assert.match(warnings[0].reason, /generator/);
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "the skipped body still produces the right values");
+  assert.ok(tree, "tree captured");
+
+  const drive = findFrame(tree.roots, "drive");
+  assert.ok(drive, "the driving call is a root");
+  assert.equal(drive.return, 3);
+
+  assert.deepEqual(
+    drive.children.map((f) => f.name),
+    ["note", "note"],
+    "the loop body nests under the driving frame and the generator adds no frames",
+  );
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];
