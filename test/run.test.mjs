@@ -2145,6 +2145,29 @@ test("cli traces a fixture end to end", () => {
   assert.match(res.stdout, /fib\(5\) = 5/);
 });
 
+test("cli traces an async fixture end to end", () => {
+  const fixture = join(HERE, "fixtures", "async.js");
+  const { res, tree } = runCli(fixture);
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(tree, "out/tree.json should exist");
+  const main = tree.roots.find((r) => r.name === "main");
+  assert.ok(main, "expected main root");
+  assert.equal(main.return, 6, "main() should return 6");
+  assert.ok(main.duration >= 10, "the frame spans its awaits");
+  const names = main.children.map((c) => c.name);
+  assert.deepEqual(
+    names.filter((n) => n === "load"),
+    ["load", "load"],
+    "both loads nest under main even though they run concurrently",
+  );
+  assert.equal(
+    names.filter((n) => n === "add").length,
+    2,
+    "the loop body nests under main",
+  );
+  assert.match(res.stdout, /total = 6/);
+});
+
 test("cli preserves non-zero exit and still emits a tree on crash", () => {
   const fixture = join(HERE, "fixtures", "errors.js");
   const { res, tree } = runCli(fixture);
