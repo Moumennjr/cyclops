@@ -1698,6 +1698,42 @@ test("for await over a skipped async generator still traces the loop", () => {
   );
 });
 
+test("for await over plain sync iterables like strings and sets", () => {
+  const src = `
+    const log = [];
+    function note(ch) { log.push(ch); return ch; }
+    async function read(text) {
+      let out = "";
+      for await (const ch of text) out += note(ch);
+      for await (const n of new Set([1, 2])) out += n;
+      return out;
+    }
+    read("ab").then((s) => log.push("got:" + s));
+    await new Promise((r) => setTimeout(r, 30));
+    console.log(JSON.stringify(log));
+  `;
+  const expected = JSON.stringify(["a", "b", "got:ab12"]);
+
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "async functions must not be skipped");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, expected + "\n", "strings and sets are iterated value by value");
+  assert.ok(tree, "tree captured");
+
+  const read = findFrame(tree.roots, "read");
+  assert.ok(read, "the reading call is a root");
+  assert.equal(read.return, "ab12");
+  assert.deepEqual(
+    read.children.map((f) => f.name),
+    ["note", "note"],
+    "only the calls in the string loop become frames",
+  );
+});
+
 test("loops, labels and switches add no frames and keep semantics", () => {
   const src = `
     const log = [];
