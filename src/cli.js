@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { transform } from "./transform.js";
 import { stripTypes } from "./strip.js";
+import { collectLocalGraph, localSpecifiers, resolveLocal, shadowPath } from "./graph.js";
+import { rewriteSpecifier } from "./imports.js";
 import { runtimeSource } from "./runtime.js";
 import { splitTree, writeTree } from "./treeio.js";
 import { startServer } from "./server.js";
@@ -13,6 +15,20 @@ import { startServer } from "./server.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const VITE_ROOT = join(HERE, "..");
 const DEFAULT_PORT = 4600;
+
+// A relative specifier that Node will accept as written.
+//
+// `relative()` may return a bare filename with no `./`, which ESM rejects with
+// ERR_INVALID_MODULE_SPECIFIER ("x" is treated as a package name, not a path).
+// Prepending "./" for the same-directory case is the whole fix.
+function toRelativeSpecifier(fromDir, target) {
+  const rel = relative(fromDir, target).split("\\").join("/");
+  // `startsWith(".")` is true for a dotfile like ".cyclops-mid.mjs", which is
+  // why this test is "starts with ./ or ../" rather than "starts with a dot".
+  if (rel === "") return ".";
+  if (rel.startsWith("./") || rel.startsWith("../")) return rel;
+  return "./" + rel;
+}
 
 // dist/ ships with the package; a fresh clone builds it once on first serve.
 function ensureBuild() {
@@ -137,6 +153,64 @@ async function main() {
   const tmp = join(srcDir, `.cyclops-${base}-${process.pid}.mjs`);
   writeFileSync(tmp, runtimeSource() + "\n" + result.code);
 
+  // Neighbouring local modules get instrumented too. A file the entry imports
+  // runs *unmodified* on disk otherwise, so its functions never become frames
+  // and every cross-file call looks like a leaf.
+  //
+  // Only relative specifiers are followed, and each neighbour is written
+  // *beside itself* so its own relative imports keep resolving -- which means
+  // the walk is transitive without any path rewriting.
+  const shadows = [];
+  try {
+    const graph = collectLocalGraph(resolve(file));
+    const entryAbs = resolve(file);
+    // Where each source file's instrumented twin will live. The entry's
+    // specifiers are rewritten to point at these, otherwise Node would resolve
+    // `./helper.js` to the original, uninstrumented file and the whole exercise
+    // would achieve nothing.
+    const shadowOf = new Map();
+    for (const abs of graph.keys()) {
+      if (abs !== entryAbs) shadowOf.set(abs, shadowPath(abs, `${process.pid}`));
+    }
+
+    for (const [abs, neighbourSource] of graph) {
+      if (abs === entryAbs) continue;
+      let out;
+      try {
+        out = transform(stripTypes(neighbourSource, abs), { filename: abs });
+      } catch {
+        continue; // a neighbour we cannot parse stays as it is
+      }
+      // Repoint this neighbour's own relative imports at the other shadows.
+      let code = out.code;
+      for (const spec of localSpecifiers(neighbourSource)) {
+        const target = resolveLocal(spec, abs);
+        const dest = target && shadowOf.get(target);
+if (dest) {
+        code = rewriteSpecifier(code, spec, toRelativeSpecifier(dirname(abs), dest));
+      }
+      }
+      writeFileSync(shadowOf.get(abs), code);
+      shadows.push(shadowOf.get(abs));
+    }
+
+    // ...and the entry's, the same way.
+    let entryCode = result.code;
+    for (const spec of localSpecifiers(source)) {
+      const target = resolveLocal(spec, resolve(file));
+      const dest = target && shadowOf.get(target);
+      if (dest) {
+        entryCode = rewriteSpecifier(entryCode, spec, toRelativeSpecifier(srcDir, dest));
+      }
+    }
+    writeFileSync(tmp, runtimeSource() + "\n" + entryCode);
+  } catch {
+    // The graph walk is an improvement, never a precondition.
+  }
+
+  // The shadows must still exist while the child runs, so they are deleted
+  // only after the process is done -- not in the same `finally` that unlinks
+  // the entry.
   let res;
   try {
     res = spawnSync(process.execPath, [tmp], { encoding: "utf8" });
@@ -147,6 +221,11 @@ async function main() {
     try {
       unlinkSync(tmp);
     } catch {}
+    for (const s of shadows) {
+      try {
+        unlinkSync(s);
+      } catch {}
+    }
   }
 
   process.stdout.write(res.stdout ?? "");

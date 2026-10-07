@@ -6,11 +6,35 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 export const CYC_MARKER = String.fromCharCode(0) + "CYCLOPS" + String.fromCharCode(0);
 
-export function runtimeSource() {
+// The tracer functions are defined once, as source text, and installed onto
+// globalThis before the instrumented program runs.
+//
+// This is what makes multi-file tracing possible. Instrumented neighbours are
+// separate ESM modules, and a module-scope binding in the entry is invisible to
+// them -- ESM has no shared module scope. globalThis is the one place every
+// module can reach, so all of them end up driving the same call stack and
+// contributing to the same tree.
+const TRACER_NAMES = [
+  "__enter", "__ret", "__err", "__sus", "__resume", "__cb", "__aiter",
+  "__find", "__remove",
+];
+
+export function runtimeSource({ expose = true } = {}) {
+  const body = buildRuntime();
+
+  if (!expose) return `"use strict";\n${body}`;
+
+  const installs = TRACER_NAMES.map(
+    (name) => `globalThis[${JSON.stringify(name)}] = ${name};`,
+  ).join("\n");
+  return `"use strict";\n${body}\n${installs}\n`;
+}
+
+function buildRuntime() {
   const snapshotSrc = readFileSync(join(here, "snapshot.js"), "utf8");
   const snapshotBody = snapshotSrc.replace(/^export\s+/gm, "");
 
-  return `"use strict";
+  return `
 const __cyc_snap = (function () {
 ${snapshotBody}
   return snapshot;
