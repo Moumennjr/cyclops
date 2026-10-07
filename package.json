@@ -1,7 +1,7 @@
 {
   "name": "v0",
   "version": "1.0.0",
-  "description": "",
+  "description": "Trace any JavaScript or TypeScript program as an interactive call tree",
   "homepage": "https://github.com/Moumennjr/cyclops#readme",
   "bugs": {
     "url": "https://github.com/Moumennjr/cyclops/issues"
@@ -18,7 +18,8 @@
   "type": "module",
   "files": [
     "src",
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "test": "node --test test/run.test.mjs",
@@ -29,7 +30,8 @@
   "dependencies": {
     "@babel/generator": "^8.0.6",
     "@babel/parser": "^8.0.6",
-    "@babel/traverse": "^8.0.6"
+    "@babel/traverse": "^8.0.6",
+    "esbuild": "^0.28.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.2.0",
@@ -41,5 +43,14 @@
   },
   "allowScripts": {
     "esbuild@0.28.2": true
-  }
+  },
+  "keywords": [
+    "tracer",
+    "call-tree",
+    "instrumentation",
+    "babel",
+    "typescript",
+    "profiler",
+    "visualization"
+  ]
 }
