@@ -122,8 +122,11 @@ export function localSpecifiers(source) {
 
 // The copy path a file's instrumented twin is written to. Kept beside the
 // original so relative imports inside *that* file still resolve.
-export function shadowPath(file, token) {
+//
+// The extension is decided by the caller: a CommonJS file has to stay CommonJS,
+// or its own `require()` calls stop working once the file is renamed to `.mjs`.
+export function shadowPath(file, token, ext = "mjs") {
   const dir = dirname(file);
   const name = file.split(/[\\/]/).pop().replace(/\.[^.]*$/, "");
-  return resolvePath(dir, `.cyclops-${name}-${token}.mjs`);
+  return resolvePath(dir, `.cyclops-${name}-${token}.${ext}`);
 }

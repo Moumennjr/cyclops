@@ -20,6 +20,7 @@
 // the other's output.
 
 import { transformSync } from "esbuild";
+import { parse } from "@babel/parser";
 import { needsTypeStripping, isTypeScript, extOf } from "./plugins.js";
 
 // esbuild loader per extension. `ts` also accepts .js/.mjs/.cjs input, which
@@ -30,6 +31,115 @@ function loaderFor(filename) {
   if (ext === ".jsx") return "jsx";
   return "ts";
 }
+
+// True when the file is a CommonJS module, by extension or by its own syntax.
+//
+// Both matter: a `.js` file in a `"type": "module"` package that uses `require`
+// is CommonJS, and a `.js` file in a CommonJS package that uses `import` is not.
+// Deciding from the syntax means an unusual layout still works.
+//
+// The syntax is read with the parser, not a regex. A regex cannot tell
+// `module.exports = {}` from the same words inside a string literal or a
+// comment, and a false positive here renames the file to `.cjs` and breaks an
+// otherwise-working ESM program.
+function dialectFromSyntax(source) {
+  let ast;
+  try {
+    ast = parse(source, {
+      sourceType: "unambiguous",
+      errorRecovery: true,
+      allowReturnOutsideFunction: true,
+      plugins: ["typescript", "jsx"],
+    });
+  } catch {
+    return null; // unparseable: fall back to the extension alone
+  }
+
+  let cjs = false;
+  let esm = false;
+
+  const walk = (node) => {
+    if (!node || typeof node !== "object" || cjs && esm) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    switch (node.type) {
+      case "ImportDeclaration":
+      case "ExportNamedDeclaration":
+      case "ExportAllDeclaration":
+      case "ExportDefaultDeclaration":
+        esm = true;
+        return;
+      case "CallExpression":
+        if (node.callee &&
+            node.callee.type === "Identifier" &&
+            node.callee.name === "require") {
+          cjs = true;
+        }
+        break;
+      case "MemberExpression": {
+        const { object, property, computed } = node;
+        if (object.type === "Identifier" && object.name === "module" &&
+            !computed && property.type === "Identifier" &&
+            (property.name === "exports" || property.name === "require")) {
+          cjs = true;
+        }
+        if (object.type === "Identifier" && object.name === "exports" &&
+            !computed) {
+          cjs = true;
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    for (const key of Object.keys(node)) {
+      if (key === "loc" || key === "leadingComments" ||
+          key === "trailingComments" || key === "innerComments") {
+        continue;
+      }
+      walk(node[key]);
+    }
+  };
+  walk(ast.program);
+
+  // Mixed files are treated as CommonJS: an ESM file cannot contain a
+  // top-level require() and still run, whereas a CJS file tolerates the
+  // interop helpers that look like ESM.
+  if (cjs) return true;
+  if (esm) return false;
+  return null;
+}
+
+export function isCommonJs(source, filename) {
+  const ext = extOf(filename);
+  if (ext === ".cjs" || ext === ".cts") return true;
+  if (ext === ".mjs" || ext === ".mts") return false;
+
+  const bySyntax = dialectFromSyntax(source);
+  if (bySyntax !== null) return bySyntax;
+
+  // Could not parse: assume the common case rather than renaming blindly.
+  return false;
+}
+
+// The extension the instrumented copy is written with.
+//
+// The entry is written as `.mjs` because the runtime prelude is ESM. A
+// CommonJS file that keeps `require()` cannot be renamed to `.mjs`: Node would
+// treat it as an ES module and `require` would be undefined at run time. Such a
+// file is written as `.cjs` instead, with a `require` shim so the prepended ESM
+// prelude can still be concatenated in front of it.
+export function shadowExtension(source, filename) {
+  return isCommonJs(source, filename) ? "cjs" : "mjs";
+}
+
+// No shim is needed for CommonJS, which is worth stating because it was not
+// obvious. The generated tracer contains no `import` or `export` -- it defines
+// plain functions and ends by assigning them to globalThis -- so the very same
+// text is valid in an ES module *and* in a CommonJS script. A `.cjs` shadow can
+// therefore take the identical prelude that a `.mjs` shadow does.
 
 // Whether a file carries syntax Babel parses but cannot print as runnable
 // JavaScript.

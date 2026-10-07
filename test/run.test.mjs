@@ -15,7 +15,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createServer as netServer } from "node:net";
 
 import { transform } from "../src/transform.js";
-import { stripTypes } from "../src/strip.js";
+import { stripTypes, isCommonJs, shadowExtension } from "../src/strip.js";
 import { parse } from "@babel/parser";
 import { runtimeSource, CYC_MARKER } from "../src/runtime.js";
 import { splitTree, writeTree } from "../src/treeio.js";
@@ -113,6 +113,44 @@ test("transform instruments sync, async and generator functions", () => {
   assert.match(code, /__enter\("i"/, "generators are instrumented too");
   assert.match(code, /__enter\("j"/, "async generators are instrumented too");
   assert.deepEqual(warnings, [], "nothing is skipped any more");
+});
+
+test("a CommonJS entry is detected and traced as CommonJS", () => {
+  // The instrumented copy used to be written with a .mjs suffix
+  // unconditionally. Renaming a CommonJS file to .mjs makes Node treat it as an
+  // ES module, and its own require() calls then fail with "require is not
+  // defined in ES module scope" -- the trace died on a file that ran fine.
+  const src = `
+    const helper = (x) => x * 2;
+    function run(n) { return helper(n) + 1; }
+    module.exports = { run };
+    console.log(run(5));
+  `;
+  assert.equal(isCommonJs(src, "legacy.js"), true, "syntax alone identifies it");
+  assert.equal(shadowExtension(src, "legacy.js"), "cjs");
+
+  const { code } = transform(stripTypes(src, "legacy.js"), {
+    filename: "legacy.js",
+  });
+  assert.match(code, /module\.exports/, "the module keeps its own CJS shape");
+  assert.match(code, /__enter\("run"/, "and is still instrumented");
+});
+
+test("an ESM file is not mistaken for CommonJS", () => {
+  const src = `
+    import { readFileSync } from "node:fs";
+    export function run(n) { return n + 1; }
+    console.log(run(1));
+  `;
+  assert.equal(isCommonJs(src, "app.mjs"), false, "an explicit .mjs is always ESM");
+  assert.equal(isCommonJs(src, "app.js"), false, "a bare import means ESM");
+  assert.equal(shadowExtension(src, "app.js"), "mjs");
+  // `require` as a property name, and inside a string, must not trip the probe
+  assert.equal(
+    isCommonJs('const s = "module.exports is a string";', "x.js"),
+    false,
+    "a string mentioning module.exports is not CommonJS",
+  );
 });
 
 test("every flavour of scheduler re-attaches its callback to the caller", () => {

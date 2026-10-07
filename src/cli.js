@@ -5,7 +5,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { transform } from "./transform.js";
-import { stripTypes } from "./strip.js";
+import { stripTypes, shadowExtension } from "./strip.js";
 import { collectLocalGraph, localSpecifiers, resolveLocal, shadowPath } from "./graph.js";
 import { rewriteSpecifier } from "./imports.js";
 import { runtimeSource } from "./runtime.js";
@@ -150,7 +150,13 @@ async function main() {
   // (`package.json` may still say "type": "commonjs").
   const srcDir = dirname(resolve(file));
   const base = basename(file).replace(/\.[^.]*$/, "");
-  const tmp = join(srcDir, `.cyclops-${base}-${process.pid}.mjs`);
+  // A CommonJS entry keeps a .cjs shadow so its own require() survives; see
+  // shadowExtension() for why this cannot just always be .mjs.
+  const entryExt = shadowExtension(source, file);
+  if (entryExt === "cjs") {
+    console.error("[cyclops] commonjs entry detected, tracing it as .cjs");
+  }
+  const tmp = join(srcDir, `.cyclops-${base}-${process.pid}.${entryExt}`);
   writeFileSync(tmp, runtimeSource() + "\n" + result.code);
 
   // Neighbouring local modules get instrumented too. A file the entry imports
@@ -169,8 +175,12 @@ async function main() {
     // `./helper.js` to the original, uninstrumented file and the whole exercise
     // would achieve nothing.
     const shadowOf = new Map();
-    for (const abs of graph.keys()) {
-      if (abs !== entryAbs) shadowOf.set(abs, shadowPath(abs, `${process.pid}`));
+    for (const [abs, neighbourSrc] of graph) {
+      if (abs === entryAbs) continue;
+      shadowOf.set(
+        abs,
+        shadowPath(abs, `${process.pid}`, shadowExtension(neighbourSrc, abs)),
+      );
     }
 
     for (const [abs, neighbourSource] of graph) {
