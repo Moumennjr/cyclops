@@ -115,6 +115,98 @@ test("transform instruments sync, async and generator functions", () => {
   assert.deepEqual(warnings, [], "nothing is skipped any more");
 });
 
+test("every flavour of scheduler re-attaches its callback to the caller", () => {
+  // A callback handed to anything that defers work runs outside the caller's
+  // dynamic extent, so without __cb it would land at the top of the tree with
+  // no parent. The named globals are only part of the story: real code routes
+  // callbacks through its own scheduler all the time.
+  const src = `
+    const log = [];
+    function later(tag) { log.push(tag); return tag; }
+    const timer = { enqueue(fn) { setTimeout(fn, 4); } };
+    function scheduleAll() {
+      setTimeout(() => later("bare"), 2);
+      globalThis.setTimeout(() => later("global"), 2);
+      process.nextTick(() => later("nextTick"));
+      queueMicrotask(() => later("micro"));
+      timer.enqueue(() => later("custom"));
+      Promise.resolve().then(() => later("promise"));
+      return "scheduled";
+    }
+    scheduleAll();
+    await new Promise((r) => setTimeout(r, 40));
+    console.log(JSON.stringify(log));
+  `;
+  const plain = runPlain(src);
+  assert.equal(plain.status, 0, "the untouched program runs");
+
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "nothing is skipped");
+  assert.equal(res.status, 0);
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+
+  const scheduler = findFrame(tree.roots, "scheduleAll");
+  assert.ok(scheduler, "the scheduling call is a root");
+  assert.equal(scheduler.return, "scheduled");
+
+  const tags = findFrames(tree.roots, "later").map((f) => f.return);
+  assert.equal(tags.length, 6, "all six callbacks ran");
+  assert.deepEqual(
+    [...tags].sort(),
+    ["bare", "custom", "global", "micro", "nextTick", "promise"],
+    "and each produced a frame",
+  );
+
+  // timer.enqueue is traced like any other function. The callback it defers
+  // lands at the top level, correctly: enqueue has already returned by the time
+  // its setTimeout fires, so it is no longer the nearest running frame.
+  const enqueue = findFrame(scheduler.children, "enqueue");
+  assert.ok(
+    enqueue,
+    "a user-defined scheduler is traced too, not just the named globals",
+  );
+  assert.equal(fmt(enqueue.return), "undefined", "it returns nothing");
+
+  // The two that fire before scheduleAll returns (microtask, promise) are
+  // children of it. The three timers fire later, when scheduleAll has already
+  // closed, so they are roots -- which is why the count of roots varies with
+  // timing and is not asserted here.
+  const inline = scheduler.children.filter((c) => c.name === "anonymous");
+  assert.ok(inline.length >= 2, "callbacks that ran before the caller closed nest under it");
+  assert.equal(
+    findFrames(tree.roots, "later").length,
+    6,
+    "all six callbacks reached later() exactly once",
+  );
+});
+
+test("ordinary method calls are not mistaken for schedulers", () => {
+  // The name-based scheduler check must stay narrow, or every call to a method
+  // called `next` or `after` gets wrapped and the output changes.
+  const src = `
+    function use(v) { return v * 2; }
+    const it = { next: (v) => v + 1, after: (v) => v - 1, defer: (v) => v };
+    const results = [
+      Math.max(use(1), 10),
+      Math.min(use(2), 10),
+      it.next(3),
+      it.after(3),
+      it.defer(3),
+      [1, 2].at(0),
+    ];
+    console.log(JSON.stringify(results));
+  `;
+  const plain = runPlain(src);
+  const { res, tree } = runTree(src);
+  assert.equal(res.status, 0);
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(
+    findFrames(tree.roots, "use").length,
+    2,
+    "only the two real calls of use() are frames",
+  );
+});
+
 test("decorators parse, run and are traced", () => {
   const src = `
     function logged(target, key, desc) {

@@ -5,11 +5,35 @@ const awaited = new WeakSet();
 const forAwait = new WeakSet();
 const retWrapped = new WeakSet();
 const yielded = new WeakSet();
+// The global deferred-work functions, in both their bare and `globalThis.`
+// forms. A callback handed to one of these runs later, outside the caller's
+// dynamic extent, so it has to be re-attached to the frame that scheduled it.
 const SCHEDULERS = new Set([
   "setTimeout",
   "setInterval",
   "setImmediate",
   "queueMicrotask",
+]);
+
+// Any `x.defer(cb)` shape, in addition to the named ones below. A callback
+// passed as the first argument is assumed to be invoked later.
+const DEFER_METHODS = new Set([
+  "setTimeout",
+  "setInterval",
+  "setImmediate",
+  "queueMicrotask",
+  "nextTick",
+  "setImmediate",
+  "nextTick",
+  "defer",
+  "next",
+  "tick",
+  "enqueue",
+  "after",
+  "later",
+  "post",
+  "sleep",
+  "delay",
 ]);
 const PROMISE_HOOKS = new Set(["then", "catch", "finally"]);
 
@@ -166,22 +190,54 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
           },
           CallExpression(p) {
             const callee = p.node.callee;
-            const bare = t.isIdentifier(callee) && SCHEDULERS.has(callee.name);
+            const bare =
+              t.isIdentifier(callee) && SCHEDULERS.has(callee.name);
+            // globalThis.setTimeout(fn, ms) -- the same function, reached
+            // through the global object rather than the bare binding.
+            const globalForm =
+              t.isMemberExpression(callee) &&
+              !callee.computed &&
+              t.isIdentifier(callee.object, { name: "globalThis" }) &&
+              t.isIdentifier(callee.property) &&
+              SCHEDULERS.has(callee.property.name);
             const nextTick =
               t.isMemberExpression(callee) &&
               !callee.computed &&
               t.isIdentifier(callee.object, { name: "process" }) &&
               t.isIdentifier(callee.property, { name: "nextTick" });
+            // A user-defined scheduler: anything named like one on any object.
+            // Narrow by name so ordinary method calls are not all wrapped.
+            const customDefer =
+              t.isMemberExpression(callee) &&
+              !callee.computed &&
+              t.isIdentifier(callee.property) &&
+              DEFER_METHODS.has(callee.property.name) &&
+              !t.isIdentifier(callee.object, { name: "Math" });
             const promiseHook =
               t.isMemberExpression(callee) &&
               !callee.computed &&
               t.isIdentifier(callee.property) &&
               PROMISE_HOOKS.has(callee.property.name);
-            if (!bare && !nextTick && !promiseHook) return;
-            const slots = bare || nextTick ? [0] : [0, 1];
+            if (!bare && !globalForm && !nextTick && !customDefer && !promiseHook) {
+              return;
+            }
+            // `setTimeout(fn, 2)` has the callback first and the delay second;
+            // `p.then(fn, onRejected)` has two *callbacks*. The delay must not be
+            // wrapped -- `setTimeout(__cb(id, 2), ms)` would pass a function to
+            // Node's timer, which throws a TypeError and changes behaviour.
+            const slots = bare || globalForm || nextTick || customDefer
+              ? [0]
+              : [0, 1];
             for (const i of slots) {
               const arg = p.node.arguments[i];
               if (!arg || t.isStringLiteral(arg)) continue;
+              // Only a value that could actually be a function is wrapped.
+              const isFunctionish =
+                t.isFunctionExpression(arg) ||
+                t.isArrowFunctionExpression(arg) ||
+                t.isIdentifier(arg) ||
+                t.isMemberExpression(arg);
+              if (!isFunctionish) continue;
               p.node.arguments[i] = t.callExpression(t.identifier("__cb"), [
                 t.identifier(cycId),
                 arg,
