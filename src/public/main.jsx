@@ -26,6 +26,7 @@ import {
   edgeIO,
   traceSpan,
   frameTime,
+  frameLocation,
   fmtDur,
   NODE_W,
   LEVEL,
@@ -602,7 +603,10 @@ export default function CallTree() {
 function FlowNode({ data, isConnectable }) {
   const err = !!(data && data.error);
   const sub = [];
-  if (data && data.line != null) sub.push(`L${data.line}`);
+  // "run.js:12" rather than "L12": in a multi-file trace the line number alone
+  // is not addressable.
+  if (data && data.location) sub.push(data.location);
+  else if (data && data.line != null) sub.push(`L${data.line}`);
   if (data && data.argCount) sub.push(`${data.argCount} arg${data.argCount === 1 ? "" : "s"}`);
   const tm = (data && data.time) || null;
   const timeChip = tm ? [tm.at, tm.dur].filter(Boolean).join(" · ") : "";
@@ -780,14 +784,14 @@ function FlowDetail({ info, t0, chain, kids, onSelect, onClose, isCollapsed, onC
   const argRows = detail.argRows || [];
   const frame = info.frame || {};
   const tm = frameTime(frame, t0);
-  const line = frame.loc && frame.loc.line;
+  const where = detail.location || frameLocation(frame);
   const name = String(frame.name || detail.name || "?");
   const outKey = frame.error ? "throws" : "returns";
   return (
     <div className="cyc-card">
       <div className="cyc-card-top">
         <div className="cyc-name">{name}</div>
-        <div className="cyc-where">{line != null ? `line ${line}` : ""}</div>
+        <div className="cyc-where">{where || ""}</div>
         <button className="cyc-x" onClick={onClose} title="Close">
           ×
         </button>

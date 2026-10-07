@@ -1,4 +1,5 @@
 import * as t from "@babel/types";
+import { basename } from "node:path";
 
 const processed = new WeakSet();
 const awaited = new WeakSet();
@@ -107,6 +108,10 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
         const cycId = path.scope.generateUid("cyc");
         const isGenerator = !!path.node.generator;
         const name = functionName(path);
+        // Baked into every frame so a multi-file trace says where a call came
+        // from. Without it two modules can both define `validate`, and the name
+        // alone cannot be looked up.
+        const fileLabel = basename(filename);
         const line = path.node.loc ? path.node.loc.start.line : null;
         const isAsync = !!path.node.async;
 
@@ -285,9 +290,11 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
             t.callExpression(t.identifier("__enter"), [
               t.stringLiteral(name),
               t.arrayExpression(argumentExpressions(path.node.params)),
-              line !== null ? t.objectExpression([
-                t.objectProperty(t.identifier("line"), t.numericLiteral(line)),
-              ]) : t.identifier("null"),
+              t.objectExpression([
+                t.objectProperty(t.identifier("line"),
+                  line !== null ? t.numericLiteral(line) : t.identifier("null")),
+                t.objectProperty(t.identifier("file"), t.stringLiteral(fileLabel)),
+              ]),
             ]),
           ),
         ]);

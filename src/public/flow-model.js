@@ -157,6 +157,18 @@ export function valueType(v) {
   return typeof v;
 }
 
+// "run.js:12" -- the one place a frame's location is formatted, so the node
+// chip and the detail card cannot disagree about it.
+export function frameLocation(frame) {
+  const loc = frame && frame.loc;
+  const line = loc && typeof loc.line === "number" ? loc.line : null;
+  const file = loc && typeof loc.file === "string" && loc.file ? loc.file : null;
+  if (file && line !== null) return `${file}:${line}`;
+  if (file) return file;
+  if (line !== null) return `L${line}`;
+  return null;
+}
+
 export function describeFrame(frame) {
   const rows = [];
   if (frame.error) {
@@ -177,6 +189,8 @@ export function describeFrame(frame) {
   }));
   return {
     name: escapeHtml(frameName(frame)),
+    file: frame && frame.loc && frame.loc.file ? frame.loc.file : null,
+    location: frameLocation(frame),
     argRows,
     rows,
     error: frame.error ? `${frame.error.name}: ${frame.error.message}` : null,
@@ -326,6 +340,8 @@ export function toFlowModel(roots, layout) {
           childCount: kids.length,
           argCount: Array.isArray(f.args) ? f.args.length : 0,
           line: f.loc && typeof f.loc.line === "number" ? f.loc.line : null,
+          file: f.loc && f.loc.file ? f.loc.file : null,
+          location: frameLocation(f),
           output: frameOutput(f),
         },
       });

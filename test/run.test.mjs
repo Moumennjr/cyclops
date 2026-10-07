@@ -27,6 +27,7 @@ import {
   clock,
   frameTime,
   traceSpan,
+  frameLocation,
   describeFrame,
   toFlowModel,
   buildTreeIndex,
@@ -116,6 +117,32 @@ test("transform instruments sync, async and generator functions", () => {
   assert.match(code, /__enter\("i"/, "generators are instrumented too");
   assert.match(code, /__enter\("j"/, "async generators are instrumented too");
   assert.deepEqual(warnings, [], "nothing is skipped any more");
+});
+
+test("every frame records which file it came from", () => {
+  // Two modules can both define `validate`. The name alone cannot be looked up
+  // in a multi-file trace, so the file is baked into each frame at instrumentation
+  // time -- not guessed in the viewer, which never sees the source.
+  const src = `
+    function shared() { return 1; }
+    console.log(shared());
+  `;
+  // src begins with a newline, so `shared` is on line 2.
+  const { code } = transform(src, { filename: "/proj/src/helper.js" });
+  assert.match(code, /file: "helper\.js"/, "the filename is embedded at the call site");
+  assert.match(code, /line: 2/, "alongside the line it always had");
+
+  const { tree } = runTree(src);
+  const frame = findFrame(tree.roots, "shared");
+  assert.ok(frame);
+  assert.equal(frame.loc.file, "prog.js", "and reaches the frame");
+  assert.equal(frame.loc.line, 2);
+
+  assert.equal(frameLocation(frame), "prog.js:2");
+  assert.equal(frameLocation({ loc: { line: 4 } }), "L4", "line alone when there is no file");
+  assert.equal(frameLocation({ loc: { file: "a.js" } }), "a.js", "file alone when there is no line");
+  assert.equal(frameLocation({}), null, "nothing to show when there is no location");
+  assert.equal(frameLocation(null), null);
 });
 
 test("a directory expands to its traceable files, skipping the usual noise", () => {
