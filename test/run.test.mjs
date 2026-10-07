@@ -97,7 +97,7 @@ function runCli(fixture, args = []) {
   return { res, tree };
 }
 
-test("transform instruments sync and async functions, skips generators", () => {
+test("transform instruments sync, async and generator functions", () => {
   const { code, warnings } = transform(
     `function f(a){ return a + 1; } async function g(a){ return await h(a); } function* i(){} async function* j(){}`,
     { filename: "x.js" },
@@ -105,17 +105,118 @@ test("transform instruments sync and async functions, skips generators", () => {
   assert.match(code, /__enter\("f"/);
   assert.match(code, /__ret\(_cyc, a \+ 1\)/);
   assert.match(code, /__enter\("g"/);
-  assert.match(code, /__ret\(_cyc2, __resume\(_cyc2, await __sus\(_cyc2, h\(a\)\)\)\)/);
-  assert.ok(!code.includes('__enter("i"'), "generators are still skipped");
-  assert.ok(!code.includes('__enter("j"'), "async generators are still skipped");
-  assert.deepEqual(
-    warnings.map((w) => w.reason),
-    ["generator function", "async generator function"],
+  assert.match(code, /__ret\(_cyc2, __resume\(_cyc2, await __sus\(_cyc2, h\(a\)\)\)/);
+  assert.match(code, /__enter\("i"/, "generators are instrumented too");
+  assert.match(code, /__enter\("j"/, "async generators are instrumented too");
+  assert.deepEqual(warnings, [], "nothing is skipped any more");
+});
+
+test("a generator's frame opens on first next and closes on return", () => {
+  const src = `
+    function* counter(n) {
+      for (let i = 0; i < n; i++) { yield i * i; }
+      return "done";
+    }
+    const all = [...counter(3)];
+    console.log(JSON.stringify(all));
+  `;
+  const plain = runPlain(src);
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "a generator is not a reason to skip");
+  assert.equal(res.status, 0);
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, "[0,1,4]\n");
+
+  const counter = findFrame(tree.roots, "counter");
+  assert.ok(counter, "the generator call is a frame");
+  assert.deepEqual(counter.args, [3]);
+  assert.equal(counter.return, "done", "the return value is the generator's");
+  assert.equal(counter.error, null);
+  assert.notEqual(counter.endedAt, null, "the frame is closed when it returns");
+});
+
+test("a generator abandoned mid-iteration leaves an open frame", () => {
+  const src = `
+    function* gen() { yield 1; yield 2; yield 3; }
+    const it = gen();
+    it.next();
+    it.next();
+    console.log("partial");
+  `;
+  const { res, tree } = runTree(src);
+  assert.equal(res.status, 0);
+
+  const gen = findFrame(tree.roots, "gen");
+  assert.ok(gen, "the abandoned generator is still a frame");
+  assert.equal(gen.endedAt, null, "it never returned, so it stays open");
+  assert.equal(gen.duration, undefined, "an open frame has no duration");
+  assert.ok(traceSpan(tree.roots).start, "the trace still has a span");
+});
+
+test("delegating and nested generators are traced without breaking iteration", () => {
+  const src = `
+    function* inner() { yield 1; yield 2; }
+    function* outer() { yield* inner(); yield [...inner()]; }
+    console.log(JSON.stringify([...outer()]));
+  `;
+  const plain = runPlain(src);
+  const { res, tree } = runTree(src);
+  assert.equal(res.status, 0);
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, "[1,2,[1,2]]\n");
+
+  const outer = findFrame(tree.roots, "outer");
+  assert.ok(outer, "the delegating generator is a frame");
+  assert.equal(fmt(outer.return), "undefined", "yield* leaves no return value");
+  assert.ok(
+    findFrame(tree.roots, "inner"),
+    "the delegated generator ran and produced frames of its own",
   );
-  assert.deepEqual(
-    warnings.map((w) => w.name),
-    ["i", "j"],
-  );
+});
+
+test("a generator that throws records the error", () => {
+  const src = `
+    function* boom() { yield 1; throw new RangeError("gen-bang"); }
+    try { [...boom()]; } catch (e) { console.log("caught", e.message); }
+  `;
+  const plain = runPlain(src);
+  const { res, tree } = runTree(src);
+  assert.equal(res.status, 0);
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+
+  const boom = findFrame(tree.roots, "boom");
+  assert.ok(boom, "the throwing generator is a frame");
+  assert.deepEqual(boom.error, { name: "RangeError", message: "gen-bang" });
+  assert.notEqual(boom.endedAt, null, "the frame is closed when it throws");
+});
+
+test("an async generator is traced across its awaits", () => {
+  const src = `
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    async function* stream(n) {
+      for (let i = 0; i < n; i++) {
+        await sleep(5);
+        yield i;
+      }
+      return "end";
+    }
+    const out = [];
+    for await (const v of stream(3)) out.push(v);
+    await sleep(30);
+    console.log(JSON.stringify(out));
+  `;
+  const plain = runPlain(src);
+  const { res, tree } = runTree(src);
+  assert.equal(res.status, 0);
+  assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
+  assert.equal(res.stdout, "[0,1,2]\n");
+
+  const stream = findFrame(tree.roots, "stream");
+  assert.ok(stream, "the async generator is a frame");
+  assert.deepEqual(stream.args, [3]);
+  assert.equal(stream.return, "end", "its return value is recorded");
+  assert.equal(stream.error, null);
+  assert.notEqual(stream.endedAt, null, "the frame closes when iteration ends");
 });
 
 test("runtime builds a correct nested tree from executed code", () => {
@@ -1657,7 +1758,7 @@ test("an await inside the loop body suspends and resumes the same frame", () => 
   );
 });
 
-test("for await over a skipped async generator still traces the loop", () => {
+test("for await over an async generator traces the loop and the generator", () => {
   const src = `
     const log = [];
     function note(v) { log.push("n" + v); return v; }
@@ -1680,8 +1781,7 @@ test("for await over a skipped async generator still traces the loop", () => {
   assert.equal(plain.status, 0, "the untouched program runs");
 
   const { res, warnings, tree } = runTree(src);
-  assert.equal(warnings.length, 1, "the generator itself is skipped with one warning");
-  assert.match(warnings[0].reason, /generator/);
+  assert.deepEqual(warnings, [], "the generator is instrumented like any other function");
   assert.equal(res.status, 0, "the instrumented program runs");
   assert.equal(res.stdout, plain.stdout, "byte-for-byte the same output");
   assert.equal(res.stdout, expected + "\n", "the skipped body still produces the right values");
@@ -1692,9 +1792,19 @@ test("for await over a skipped async generator still traces the loop", () => {
   assert.equal(drive.return, 3);
 
   assert.deepEqual(
-    drive.children.map((f) => f.name),
-    ["note", "note"],
-    "the loop body nests under the driving frame and the generator adds no frames",
+    drive.children.map((f) => f.name).filter((n) => n !== "anonymous"),
+    ["count", "note", "note"],
+    "the generator and both loop bodies are frames of the driving call",
+  );
+
+  const count = findFrame(drive.children, "count");
+  assert.ok(count, "the async generator is a frame in its own right");
+  assert.equal(count.error, null);
+  assert.notEqual(count.endedAt, null, "and it closes when iteration finishes");
+  assert.deepEqual(
+    count.children.filter((f) => f.name !== "anonymous").map((f) => f.name),
+    [],
+    "the generator is suspended across its yield, so the consumer's loop body is not its child",
   );
 });
 

@@ -4,6 +4,7 @@ const processed = new WeakSet();
 const awaited = new WeakSet();
 const forAwait = new WeakSet();
 const retWrapped = new WeakSet();
+const yielded = new WeakSet();
 const SCHEDULERS = new Set([
   "setTimeout",
   "setInterval",
@@ -11,6 +12,11 @@ const SCHEDULERS = new Set([
   "queueMicrotask",
 ]);
 const PROMISE_HOOKS = new Set(["then", "catch", "finally"]);
+
+// Generators are traced by default. They used to be skipped outright, which
+// meant an entire iterator-based abstraction was invisible; `false` restores
+// that behaviour and the warnings with it.
+const GENERATOR_TRACED = true;
 
 function keyName(key) {
   if (t.isIdentifier(key)) return key.name;
@@ -58,7 +64,7 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
         if (processed.has(path.node)) return;
         processed.add(path.node);
 
-        if (path.node.generator) {
+        if (path.node.generator && !GENERATOR_TRACED) {
           warnings.push({
             reason: path.node.async ? "async generator function" : "generator function",
             name: functionName(path),
@@ -75,6 +81,7 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
         if (!isArrowExpr && !t.isBlockStatement(path.node.body)) return;
 
         const cycId = path.scope.generateUid("cyc");
+        const isGenerator = !!path.node.generator;
         const name = functionName(path);
         const line = path.node.loc ? path.node.loc.start.line : null;
         const isAsync = !!path.node.async;
@@ -101,6 +108,27 @@ export function instrument({ warnings = [], filename = "unknown" } = {}) {
               t.identifier(cycId),
               p.node.argument ? p.node.argument : t.identifier("undefined"),
             ]);
+          },
+          // `yield` needs the same treatment as `await`. A generator suspends
+          // at the yield and the *consumer's* loop body runs next; if the frame
+          // stayed active, calls made by that body would be filed as children
+          // of the generator instead of the consumer. Suspending across the
+          // yield is what keeps `for await (const v of gen()) body(v)` honest.
+          YieldExpression(p) {
+            if (!isGenerator || yielded.has(p.node)) return;
+            yielded.add(p.node);
+            const susp = t.callExpression(t.identifier("__sus"), [
+              t.identifier(cycId),
+              p.node.argument ? p.node.argument : t.identifier("undefined"),
+            ]);
+            const wrappedYield = t.yieldExpression(susp, p.node.delegate);
+            yielded.add(wrappedYield);
+            p.replaceWith(
+              t.callExpression(t.identifier("__resume"), [
+                t.identifier(cycId),
+                wrappedYield,
+              ]),
+            );
           },
           AwaitExpression(p) {
             if (awaited.has(p.node)) return;
