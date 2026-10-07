@@ -15,6 +15,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createServer as netServer } from "node:net";
 
 import { transform } from "../src/transform.js";
+import { stripTypes } from "../src/strip.js";
 import { parse } from "@babel/parser";
 import { runtimeSource, CYC_MARKER } from "../src/runtime.js";
 import { splitTree, writeTree } from "../src/treeio.js";
@@ -37,8 +38,11 @@ import { startServer } from "../src/server.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "src", "cli.js");
 
-function runInstrumented(source) {
-  const { code, warnings } = transform(source, { filename: "<test>" });
+// The pipeline the CLI actually runs: esbuild lowering first (types, JSX,
+// decorators), then Babel instrumentation. Mirroring it here keeps the tests
+// honest about what a real invocation produces.
+function runInstrumented(source, filename = "prog.js") {
+  const { code, warnings } = transform(stripTypes(source, filename), { filename });
   const dir = mkdtempSync(join(tmpdir(), "cyc-unit-"));
   const file = join(dir, "prog.mjs");
   writeFileSync(file, runtimeSource() + "\n" + code);
@@ -109,6 +113,78 @@ test("transform instruments sync, async and generator functions", () => {
   assert.match(code, /__enter\("i"/, "generators are instrumented too");
   assert.match(code, /__enter\("j"/, "async generators are instrumented too");
   assert.deepEqual(warnings, [], "nothing is skipped any more");
+});
+
+test("decorators parse, run and are traced", () => {
+  const src = `
+    function logged(target, key, desc) {
+      const orig = desc.value;
+      desc.value = function (...a) { return orig.apply(this, a); };
+      return desc;
+    }
+    function tag(target) { target.tagged = true; return target; }
+
+    @tag
+    class Service {
+      #count = 0;
+      @logged
+      bump(by) { this.#count += by; return this.#count; }
+      get count() { return this.#count; }
+    }
+
+    const s = new Service();
+    s.bump(2);
+    s.bump(3);
+    console.log(s.count, Service.tagged);
+  `;
+  // Rule 3 (run it uninstrumented and diff) cannot apply here: Node itself
+  // rejects decorator syntax, which is precisely why esbuild lowers it. The
+  // expected output is asserted literally instead.
+  const { res, warnings, tree } = runTree(src);
+  assert.deepEqual(warnings, [], "a decorator is not a reason to skip");
+  assert.equal(res.status, 0, "the instrumented program runs");
+  // A class decorator receives the constructor, so the flag lands on Service
+  // itself rather than on an instance.
+  assert.equal(res.stdout, "5 true\n", "both decorators actually applied");
+
+  const bumps = findFrames(tree.roots, "bump");
+  assert.equal(bumps.length, 2, "both calls of the decorated method are frames");
+  assert.deepEqual(
+    bumps.map((f) => f.return),
+    [2, 5],
+    "each call records its own return, so the wrapper did not collapse them",
+  );
+  assert.equal(findFrame(tree.roots, "count").return, 5, "the getter is traced too");
+});
+
+test("compiler helper functions do not appear as frames", () => {
+  // esbuild lowers TypeScript private fields to __privateGet/__privateSet and
+  // decorators to __decorateClass. Those helpers are real functions, so without
+  // being filtered they bury the user's own calls under compiler scaffolding.
+  const src = `
+    class Box {
+      #v = 1;
+      read() { return this.#v; }
+      write(x) { this.#v = x; return this.#v; }
+    }
+    const b = new Box();
+    b.write(7);
+    console.log(b.read());
+  `;
+  const { tree } = runTree(src);
+  const names = [];
+  (function walk(frames) {
+    for (const f of frames || []) { names.push(f.name); walk(f.children); }
+  })(tree.roots);
+
+  assert.ok(names.includes("write"), "the user's own methods are traced");
+  assert.ok(names.includes("read"), "including the private-field reader");
+  for (const helper of [
+    "__privateGet", "__privateSet", "__privateAdd",
+    "__decorateClass", "__accessCheck",
+  ]) {
+    assert.ok(!names.includes(helper), `${helper} is not a frame`);
+  }
 });
 
 test("a generator's frame opens on first next and closes on return", () => {

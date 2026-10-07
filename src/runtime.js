@@ -46,7 +46,31 @@ const __cyc_frames = new Map();
 const __cyc_suspended = new Set();
 let __cyc_nextId = 1;
 
+// Names that belong to the compiler, not to the traced program.
+//
+// TypeScript and decorator files go through esbuild first, and its output
+// contains helper functions (__privateGet, __decorateClass, ...). They are real
+// functions, so they would appear as frames and bury the user's own calls under
+// a layer of compiler scaffolding. Frames for these are dropped on entry, which
+// also leaves their children correctly re-parented to the nearest real caller.
+const SYNTHETIC = new Set([
+  "__privateAdd", "__privateGet", "__privateSet", "__privateMethod",
+  "__publicField", "__accessCheck", "__decorateClass", "__decorateParam",
+  "__classPrivateFieldGet", "__classPrivateFieldSet",
+  "__export", "__toESM", "__commonJS", "__toCommonJS", "__propKey",
+  "__defProp", "__getOwnPropDesc", "__spreadValues", "__read", "__objRest",
+]);
+
 function __enter(name, args, loc) {
+  // A synthetic frame is still tracked for stack purposes but is never emitted,
+  // so anything it calls hangs off the nearest real caller instead.
+  if (typeof name === "string" && SYNTHETIC.has(name)) {
+    const prev = __cyc_stack[__cyc_stack.length - 1];
+    return { __hidden: true, id: 0, name: name, args: [], loc: loc || null,
+             children: [], return: { type: "undefined" }, error: null,
+             startedAt: Date.now(), endedAt: null, parentFrame: prev || null };
+  }
+
   const frame = {
     id: __cyc_nextId++,
     name: name,
@@ -148,6 +172,7 @@ function __aiter(id, iterable) {
 
 function __ret(id, value) {
   const frame = __find(id);
+  if (frame && frame.__hidden) return value;
   if (frame) {
     __cyc_suspended.delete(id);
     frame.return = __cyc_snap(value);
@@ -160,6 +185,7 @@ function __ret(id, value) {
 
 function __err(id, error) {
   const frame = __find(id);
+  if (frame && frame.__hidden) return;
   if (frame) {
     __cyc_suspended.delete(id);
     frame.error = {
@@ -172,7 +198,17 @@ function __err(id, error) {
   }
 }
 
+// A hidden frame is not registered in __cyc_frames (its id is always 0 and
+// several can be live at once). Routing id 0 to the nearest real ancestor keeps
+// __ret/__err working inside the helper without inventing a frame.
 function __find(id) {
+  if (id === 0) {
+    for (let i = __cyc_stack.length - 1; i >= 0; i--) {
+      const f = __cyc_stack[i];
+      if (!f.__hidden) return f;
+    }
+    return null;
+  }
   return __cyc_frames.get(id) || null;
 }
 

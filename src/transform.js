@@ -12,7 +12,7 @@ export function transform(
   const ast = parse(source, {
     sourceType,
     errorRecovery: false,
-    plugins: parserPluginsFor(filename),
+    plugins: parserPluginsFor(filename, source),
   });
   ast.program.interpreter = null;
   traverse(ast, instrument({ warnings, filename }).visitor);

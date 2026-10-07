@@ -31,16 +31,36 @@ function loaderFor(filename) {
   return "ts";
 }
 
+// Whether a file carries syntax Babel parses but cannot print as runnable
+// JavaScript.
+//
+// Decorators are the case that matters. Babel's parser accepts them behind a
+// plugin, but `generate()` emits the decorator *syntax* back verbatim and Node
+// does not accept it -- so a decorated class parses cleanly and then dies with
+// "Invalid or unexpected token" at the `@`. esbuild lowers decorators to
+// ordinary function calls, which is both runnable and closer to what the code
+// means.
+//
+// The probe matches a decorator in statement position only, so an `@` in a
+// comment or an email address in a string cannot drag a plain JavaScript file
+// through the extra pass.
+const DECORATOR = /^[ \t]*@[A-Za-z_$]/m;
+
+export function needsLowering(source, filename) {
+  if (needsTypeStripping(filename)) return true;
+  return DECORATOR.test(source);
+}
+
 // Strips type syntax from `source`, returning plain JavaScript.
 //
-// Returns the input untouched when the file is not TypeScript, so the common
-// JavaScript path costs one extname comparison.
+// Returns the input untouched when nothing needs lowering, so the common
+// JavaScript path costs one extension check and one regex.
 //
 // `experimentalDecorators` is enabled because a decorator on a class or method
 // is ordinary JavaScript users expect to work; without it esbuild rejects the
 // syntax outright rather than silently dropping the decorator.
 export function stripTypes(source, filename) {
-  if (!needsTypeStripping(filename)) return source;
+  if (!needsLowering(source, filename)) return source;
 
   const result = transformSync(source, {
     loader: loaderFor(filename),

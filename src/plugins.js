@@ -27,16 +27,30 @@ function extOf(filename) {
 }
 
 // plugins every supported dialect gets: ESM+script autodetect, and the
-// proposal-level syntax that has shipped in Node and browsers
+// proposal-level syntax that has shipped in Node and browsers.
+//
+// `decorators` covers both the legacy `experimentalDecorators` form and the
+// standard form; Babel accepts either behind that one name. `decoratorAutoAccessors`
+// is what makes the accessor form (`@x get v()`) parse at all.
 const COMMON = [
   "importAttributes",
   "explicitResourceManagement",
   "regexpUnicodeSets",
+  "decoratorAutoAccessors",
 ];
 
-export function parserPluginsFor(filename) {
+// Decorators are ambiguous: Babel needs to be told which form, and guessing
+// wrong rejects valid code. Legacy is the far more common form and the one
+// TypeScript emits by default, so it is the fallback.
+function decoratorPlugin(source) {
+  return /\/\*\s*@ts-ignore\s*\*\/|@experimentalDecorators|\^\s*experimentalDecorators/m.test(source)
+    ? "decorators-legacy"
+    : "decorators";
+}
+
+export function parserPluginsFor(filename, source = "") {
   const ext = extOf(filename);
-  const plugins = [...COMMON];
+  const plugins = [...COMMON, decoratorPlugin(source)];
 
   if (TS_EXT.has(ext) || TSX_EXT.has(ext)) {
     // `typescript` disables flow; they are mutually exclusive in one parse
