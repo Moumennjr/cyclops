@@ -8,6 +8,7 @@ import { transform } from "./transform.js";
 import { stripTypes, shadowExtension } from "./strip.js";
 import { collectLocalGraph, localSpecifiers, resolveLocal, shadowPath } from "./graph.js";
 import { rewriteSpecifier } from "./imports.js";
+import { resolveTargets } from "./targets.js";
 import { runtimeSource } from "./runtime.js";
 import { splitTree, writeTree } from "./treeio.js";
 import { startServer } from "./server.js";
@@ -75,7 +76,7 @@ function waitForSignal() {
 }
 
 function parseArgs(argv) {
-  let file = null;
+  const files = [];
   let port = null;
   let noServer = false;
   let noOpen = false;
@@ -90,27 +91,58 @@ function parseArgs(argv) {
     else if (a === "--serve") serve = true;
     else if (a === "--no-vite") continue; // deprecated no-op: the viewer ships built
     else if (a === "--help" || a === "-h") { help = true; continue; }
-    else if (!a.startsWith("-")) file = a;
+    else if (!a.startsWith("-")) files.push(a);
     else {
       console.error(`unknown argument: ${a}`);
       process.exit(1);
     }
   }
-  return {file, port, noServer, noOpen, serve, help};
+  return {files, port, noServer, noOpen, serve, help};
 }
 
 function printUsage() {
-  console.log(`usage: cyclops <file.js> [--port N] [--serve] [--no-server] [--no-open]
-  instruments <file.js>, runs it, writes the call tree to out/tree.json,
+  console.log(`usage: cyclops <file|dir|glob> [more...] [--port N] [--serve] [--no-server] [--no-open]
+
+  traces a file, a directory or a glob, writes the call tree to out/tree.json,
   and serves the viewer at http://localhost:${DEFAULT_PORT} until Ctrl+C
-  (--serve forces serving in non-interactive runs).`);
+  (--serve forces serving in non-interactive runs).
+
+  targets:
+    cyclops app.js              one file
+    cyclops src/                every traceable file in a directory
+    cyclops "src/**/*.ts"       a glob
+    cyclops a.js b.ts           the first is the entry, the rest are
+                                instrumented so its imports resolve
+
+  traced dialects: .js .mjs .cjs .jsx .ts .mts .cts .tsx
+  (generators, decorators, top-level await, private fields and async/await are
+  all traced; compiler helpers are kept out of the tree)
+
+  the entry must be a module: bare scripts with no import or require are still
+  instrumented, but everything they call has to live in that one file.`);
 }
 
 async function main() {
-  const {file, port, noServer, noOpen, serve, help} = parseArgs(process.argv.slice(2));
-  if (help || !file) {
+  const {files, port, noServer, noOpen, serve, help} = parseArgs(process.argv.slice(2));
+  if (help || !files.length) {
     printUsage();
     process.exit(help ? 0 : 1);
+  }
+
+  // A directory or glob expands to many files. Running all of them would
+  // concatenate unrelated call trees, so cyclops picks one entry and treats the
+  // rest as neighbours to instrument. The entry is chosen by name, not by
+  // position: a call tree is only meaningful from the right starting point.
+  const targets = resolveTargets(files);
+  if (targets.message) {
+    console.error(targets.message);
+    process.exit(1);
+  }
+  const file = targets.entries[0];
+  if (targets.entries.length > 1) {
+    console.error(
+      `[cyclops] ${targets.entries.length} files match; entering at ${file}`,
+    );
   }
 
   let source;

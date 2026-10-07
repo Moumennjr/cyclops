@@ -34,6 +34,9 @@ import {
   edgesBySource,
 } from "../src/public/flow-model.js";
 import { startServer } from "../src/server.js";
+import {
+  walkDir, expandGlob, resolveTargets, isTraceable, entryScore,
+} from "../src/targets.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, "..", "src", "cli.js");
@@ -113,6 +116,118 @@ test("transform instruments sync, async and generator functions", () => {
   assert.match(code, /__enter\("i"/, "generators are instrumented too");
   assert.match(code, /__enter\("j"/, "async generators are instrumented too");
   assert.deepEqual(warnings, [], "nothing is skipped any more");
+});
+
+test("a directory expands to its traceable files, skipping the usual noise", () => {
+  const root = mkdtempSync(join(tmpdir(), "cyc-walk-"));
+  mkdirSync(join(root, "src", "nested"), { recursive: true });
+  mkdirSync(join(root, "node_modules", "dep"), { recursive: true });
+  mkdirSync(join(root, "dist"), { recursive: true });
+  for (const f of [
+    "src/index.js", "src/app.ts", "src/nested/deep.jsx",
+    "src/readme.md", "src/data.json",
+    "node_modules/dep/index.js", "dist/bundle.js",
+  ]) {
+    writeFileSync(join(root, f), "");
+  }
+
+  const found = walkDir(root).map((f) => f.slice(root.length + 1).split(/[\\/]/).join("/"));
+  assert.deepEqual(
+    found.sort(),
+    ["src/app.ts", "src/index.js", "src/nested/deep.jsx"],
+    "traceable files are found; node_modules, dist and non-code are not",
+  );
+  assert.equal(isTraceable("a.tsx"), true);
+  assert.equal(isTraceable("a.md"), false);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("globs expand, including ** across directories", () => {
+  const root = mkdtempSync(join(tmpdir(), "cyc-glob-"));
+  mkdirSync(join(root, "src", "a", "b"), { recursive: true });
+  for (const f of ["src/top.js", "src/a/mid.ts", "src/a/b/low.js", "src/a/b/x.tsx"]) {
+    writeFileSync(join(root, f), "");
+  }
+
+  const rel = (list) => list.map((f) => f.slice(root.length + 1).split(/[\\/]/).join("/")).sort();
+  assert.deepEqual(
+    rel(expandGlob("src/**/*.js", { cwd: root })),
+    ["src/a/b/low.js", "src/top.js"],
+    "** crosses directories and the extension is still respected",
+  );
+  assert.deepEqual(
+    rel(expandGlob("src/**/*.ts", { cwd: root })),
+    ["src/a/mid.ts"],
+    "and the same walk finds .ts",
+  );
+  assert.deepEqual(rel(expandGlob("src/*.js", { cwd: root })), ["src/top.js"]);
+  assert.deepEqual(rel(expandGlob("src/**/*.tsx", { cwd: root })), ["src/a/b/x.tsx"]);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("several targets pick an entry by name, not by position", () => {
+  const root = mkdtempSync(join(tmpdir(), "cyc-rank-"));
+  mkdirSync(join(root, "src"), { recursive: true });
+  for (const f of ["src/util.js", "src/app.js", "src/index.js", "src/app.test.js"]) {
+    writeFileSync(join(root, f), "");
+  }
+
+  const got = resolveTargets(["src"], { cwd: root });
+  assert.equal(got.kind, "multi");
+  const top = got.entries.slice(0, 2).map((f) => f.split(/[\\/]/).pop()).sort();
+  assert.deepEqual(
+    top,
+    ["app.js", "index.js"],
+    "entry-point names are offered before helpers like util.js",
+  );
+  assert.ok(
+    !got.entries.slice(0, 2).includes(join(root, "src", "util.js")),
+    "a plain module is not chosen as the entry",
+  );
+  const names = got.entries.map((f) => f.split(/[\\/]/).pop());
+  assert.ok(
+    names.indexOf("app.test.js") > names.indexOf("util.js"),
+    "a test file ranks below a source file",
+  );
+  assert.ok(entryScore("src/index.js") > entryScore("src/util.js"));
+
+  const single = resolveTargets(["src/index.js"], { cwd: root });
+  assert.equal(single.kind, "single");
+  assert.equal(single.entries.length, 1);
+
+  assert.ok(
+    resolveTargets(["nope.js"], { cwd: root }).message,
+    "a missing target reports rather than guessing",
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("the cli enters a whole directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "cyc-cli-dir-"));
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "src", "step.js"), "export function step(n){ return n * 10; }\n");
+  writeFileSync(join(root, "src", "index.js"),
+    'import { step } from "./step.js";\nfunction run(n){ return step(n) + 1; }\nconsole.log(run(3));\n');
+
+  const res = spawnSync(
+    process.execPath,
+    [CLI, "src/", "--no-server"],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, "31\n");
+
+  const treeFile = join(root, "out", "tree.json");
+  assert.ok(existsSync(treeFile), "a tree was written");
+  const tree = JSON.parse(readFileSync(treeFile, "utf8"));
+  const run = findFrame(tree.roots, "run");
+  assert.ok(run, "the entry ran");
+  assert.deepEqual(
+    run.children.map((f) => f.name),
+    ["step"],
+    "and its import from a sibling file was instrumented too",
+  );
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("a CommonJS entry is detected and traced as CommonJS", () => {
