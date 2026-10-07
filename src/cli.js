@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { transform } from "./transform.js";
+import { stripTypes } from "./strip.js";
 import { runtimeSource } from "./runtime.js";
 import { splitTree, writeTree } from "./treeio.js";
 import { startServer } from "./server.js";
@@ -106,7 +107,12 @@ async function main() {
 
   let result;
   try {
-    result = transform(source, { filename: file });
+    // TypeScript and TSX go through esbuild first: it removes the type syntax
+    // *and* lowers JSX to createElement, so Babel receives plain JavaScript in
+    // every case. Passing TS straight to Babel would parse but emit source Node
+    // cannot run.
+    const stripped = stripTypes(source, file);
+    result = transform(stripped, { filename: file });
   } catch (e) {
     console.error(`cyclops: transform failed: ${e.message}`);
     process.exit(1);
@@ -118,7 +124,17 @@ async function main() {
     );
   }
 
-  const tmp = join(tmpdir(), `cyclops-${basename(file)}-${process.pid}.mjs`);
+  // The instrumented copy must sit *beside the source*, not in tmpdir.
+  // ESM resolves relative specifiers against the importing file's directory, so
+  // a copy in /tmp turns `./helper.js` into a lookup in /tmp and every project
+  // with an import dies with ERR_MODULE_NOT_FOUND.
+  //
+  // The original basename is kept so `__dirname`-relative behaviour is
+  // unchanged, and a `.mjs` suffix is used because the output is always ESM
+  // (`package.json` may still say "type": "commonjs").
+  const srcDir = dirname(resolve(file));
+  const base = basename(file).replace(/\.[^.]*$/, "");
+  const tmp = join(srcDir, `.cyclops-${base}-${process.pid}.mjs`);
   writeFileSync(tmp, runtimeSource() + "\n" + result.code);
 
   let res;
