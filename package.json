@@ -19,6 +19,7 @@
   "files": [
     "src",
     "dist",
+    "plugin",
     "README.md"
   ],
   "scripts": {
@@ -52,5 +53,14 @@
     "typescript",
     "profiler",
     "visualization"
-  ]
+  ],
+  "exports": {
+    ".": "./src/index.js",
+    "./engine": "./src/engine.js",
+    "./render": "./src/render.js",
+    "./analyze": "./src/analyze.js",
+    "./plugin": "./plugin/opencode.js",
+    "./package.json": "./package.json"
+  },
+  "main": "./src/index.js"
 }
