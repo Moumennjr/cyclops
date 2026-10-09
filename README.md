@@ -1,122 +1,244 @@
-# Cyclops — language coverage
+# Using cyclops as a plugin
 
-What cyclops can trace, and how it behaves when it cannot.
-
-```bash
-cyclops app.js              # one file
-cyclops src/                # every traceable file in a directory
-cyclops "src/**/*.ts"       # a glob
-cyclops a.js b.ts           # first is the entry, the rest are instrumented
-```
-
-## Dialects
-
-| Dialect | Extensions | Notes |
-|---|---|---|
-| JavaScript (ESM) | `.js` `.mjs` | the original target |
-| JavaScript (CommonJS) | `.cjs`, or `.js` using `require` | detected from syntax, kept as `.cjs` |
-| JSX | `.jsx` | lowered to `createElement` before instrumentation |
-| TypeScript | `.ts` `.mts` `.cts` | types stripped before instrumentation |
-| TSX | `.tsx` | types stripped, JSX lowered |
-
-The dialect is chosen per file, from the extension and then from the file's own
-syntax, so a `.js` file using `require` is traced as CommonJS whatever
-`package.json` says, and a `.js` file using `import` is traced as ESM.
-
-## Language features
-
-All of these are traced:
-
-- `function`, arrow functions (block and expression bodies), function expressions
-- object/class methods, getters, setters, static methods, class expressions,
-  computed method names, private methods (`#m()`) and private fields (`#v = 1`)
-- class static initialization blocks
-- `async`/`await`, including awaits inside loops, branches and `try`
-- `for await...of` over both async and sync iterables
-- generators and async generators, including `yield*` delegation
-- top-level `await` in an ESM entry
-- decorators on classes, methods and accessors
-- destructured, defaulted and rest parameters; closures; recursion
-- CommonJS `require`/`module.exports`, dynamic `import()`
-- callbacks deferred through `setTimeout`, `setInterval`, `setImmediate`,
-  `queueMicrotask`, `process.nextTick`, `globalThis.setTimeout`, promise hooks
-  (`.then`/`.catch`/`.finally`), and user-defined schedulers such as
-  `queue.enqueue(fn)` / `app.defer(fn)`
-
-Every frame records args, return value, thrown error, start and end time, and
-the file and line it came from. Values are snapshotted so cycles, `BigInt`,
-`Symbol`, `NaN`, `Date`, `RegExp` and throwing getters all survive the trip
-through JSON.
-
-## How a file is processed
+Cyclops is four things that share one engine:
 
 ```
-TypeScript / decorated / JSX source
-  -> esbuild: strip types, lower JSX and decorators to plain calls
-  -> Babel:   parse, and wrap every function in __enter / __ret / __err
-  -> written beside the source as .cyclops-<name>-<pid>.{mjs,cjs}
-  -> Node runs it; the tracer prints the tree, marker-delimited, on exit
-  -> the CLI writes out/tree.json and serves the viewer
+  CLI          cyclops src/ --watch          you, at a terminal
+  browser      http://localhost:4600         you, exploring a trace
+  editor       :CyclopsTrace :CyclopsSummary  you, while editing
+  plugin       cyclops_trace                  an agent, reading a trace as text
 ```
 
-The file is written **beside the source**, never into a temp directory, so its
-relative imports still resolve. Imported local files are instrumented the same
-way, recursively, so a cross-file call is a real parent/child link in the tree
-rather than a leaf that stops at the import boundary.
+All four call `src/engine.js`. None of them re-implement tracing.
 
-Bare specifiers (`react`, `node:fs`) are never rewritten — those belong to the
-package manager, and code inside `node_modules` is not instrumented.
+---
 
-## Compiler helpers are not frames
+## The OpenCode plugin
 
-TypeScript private fields lower to `__privateGet`/`__privateSet` and decorators to
-`__decorateClass`. Those are real functions, so instrumenting them would bury
-your own calls under scaffolding. The runtime drops frames for a known set of
-compiler helpers and re-parents their children to the nearest real caller, so
-you see your code:
+### Install
 
-```
-make -> constructor              (not: make -> constructor -> __privateAdd -> __accessCheck)
-```
-
-## Known limits
-
-- **The entry must be a module.** A bare script with no imports is instrumented
-  fine, but everything it calls has to live in that one file — nothing else is
-  loaded for it.
-- **Frames carry a basename, not a path.** Two files with the same name in
-  different directories are ambiguous in one trace. A full path would leak your
-  directory layout into a file that is meant to be committed.
-- **Only relative imports are followed.** `node_modules` is out of scope.
-- **Node builtins are not frames.** `fs.readFileSync` is a leaf; cyclops traces
-  your code, not the runtime's.
-- **A directory or glob chooses one entry** (ranked by name — `index`, `main`,
-  `app`, `cli` first, tests last) rather than running every file. The choice is
-  printed so it is never silent.
-- **Brace globs** (`*.{js,ts}`) are not expanded. Pass the extension, or list
-  the files.
-
-## Reading a trace
-
-`out/tree.json` is plain JSON and is meant to be read directly:
-
-```json
+```jsonc
+// .opencode/opencode.json
 {
-  "version": 1791392236389,
-  "generatedAt": "2026-10-07T16:57:16.389Z",
-  "roots": [
-    { "id": 1, "name": "run", "file": "app.js", "line": 2,
-      "args": [5], "return": 11, "error": null,
-      "startedAt": 1, "endedAt": 3, "duration": 2,
-      "children": [ ... ] }
-  ]
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["./.opencode/plugins/cyclops.js"]
 }
 ```
 
-A frame with `endedAt: null` never returned — the viewer renders it as
-"started ..., never returned". A frame with an `error` and no return threw.
+```js
+// .opencode/plugins/cyclops.js
+export { CyclopsPlugin } from "cyclops/plugin";
+```
 
-Values are tagged rather than raw where JSON cannot represent them:
-`{type:"nan"}`, `{type:"bigint",value:"10n"}`, `{type:"symbol",value:"Symbol(tag)"}`,
-`{type:"circular"}`, `{type:"unserializable",ctor:"Object"}`. `flow-model.js`
-turns those back into readable text for the viewer.
+That's the whole setup. There is nothing to build and no dependency to add:
+`@opencode-ai/plugin` is imported dynamically and is optional, so the plugin
+loads whether or not the host happens to have it.
+
+Restart opencode, and `cyclops_trace` is available.
+
+### What it does
+
+It runs a program and returns its call tree **as text**, so an agent can read
+control flow that source alone does not reveal — which of six `validate` calls
+actually ran, how async calls interleaved, that an early return explains the
+value.
+
+It deliberately does not return `graph.json`. That is ~425 kB, mostly node
+coordinates, which would eat the context window before the agent learned
+anything. It returns a summary plus a bounded slice, writes the full trace to
+disk on request, and tells the agent how to narrow the next call.
+
+### Arguments
+
+| Arg | Type | Default | What it does |
+|---|---|---|---|
+| `target` | string | *required* | file, directory, or glob (`src/**/*.ts`) |
+| `view` | `summary` \| `tree` \| `flat` | `summary` | what shape to return |
+| `focus` | string | — | scope everything to one function's subtree |
+| `maxDepth` | number | 12 | tree depth cap (`view: "tree"`) |
+| `maxFrames` | number | 2000 | hard frame cap |
+| `timing` | boolean | true | show per-frame durations |
+| `outFile` | string | — | write the full trace JSON here |
+| `keepTree` | boolean | false | write `out/tree.json` so the viewer can be opened |
+
+### Examples
+
+```
+cyclops_trace({ target: "src/cli.ts" })
+cyclops_trace({ target: "src/", focus: "parse", view: "tree" })
+cyclops_trace({ target: "src/**/*.js", view: "flat" })
+cyclops_trace({ target: "src/server.js", keepTree: true })
+```
+
+### What it returns
+
+Program output first, then the requested view, then a footer of facts the agent
+should not have to infer:
+
+```
+## program output
+
+total = 6
+
+# src/async.js
+
+10 frames · 2 roots · depth 3 · wall clock 41ms
+
+## where the time went
+
+  ████████████ load      21ms total   20ms self   2 calls  async.js:7
+  ███████ main           12ms total    <1ms self   1 call   async.js:12
+
+## called most often
+
+  load                 2 calls
+
+— 3 imported file(s) instrumented as well
+```
+
+Output goes first on purpose: when a program prints something and then fails,
+that output is the reason, and burying it under a call tree would be backwards.
+
+The footer reports how many files were instrumented, whether the program exited
+non-zero, and any construct that could not be traced — so a partial trace is
+never mistaken for a complete one.
+
+Output is capped at 120 kchars, cut on a line boundary, with a note saying how
+to narrow it.
+
+---
+
+## Programmatic use
+
+```js
+import { trace, summarize, renderTree, findFrames } from "cyclops";
+
+const result = trace("src/cli.ts", { cwd: process.cwd() });
+
+if (result.ok) {
+  console.log(summarize(result.tree.roots));
+  console.log(renderTree(result.tree.roots, { maxDepth: 4, timing: true }));
+}
+```
+
+`trace()` never calls `process.exit`, never writes to stdout or stderr, and
+never reads `process.argv`. It returns:
+
+```js
+{
+  ok, error,            // a program that threw is ok:true with its exit code
+  tree,                 // { roots: [...] } or null
+  exitCode, signal,
+  stdout, stderr,       // the child's own output, returned not forwarded
+  warnings,             // anything that could not be instrumented
+  entry,                // which file was chosen as the entry point
+  sourceFiles,          // every file the trace instrumented
+  instrumented,         // how many imported files were traced too
+}
+```
+
+Lower-level: `traceFile`, `traceToFile`, `prepare`/`cleanup` to manage the
+instrumented copies yourself, plus `planEntry` to see which file a target
+resolves to.
+
+---
+
+## Over HTTP
+
+While `cyclops` is serving, the same information is available to anything that
+can make a request:
+
+| Route | Returns |
+|---|---|
+| `/tree.json` | the raw trace (what the browser loads) |
+| `/summary` | where the time went, what threw — `text/plain` |
+| `/tree` | indented call tree — `text/plain` |
+| `/flat` | one line per frame — `text/plain` |
+| `/summary.json` | stats + aggregate + errors — JSON |
+| `/flat.json` | frames with name/depth/duration — JSON |
+
+All take `?focus=<name>`. `/tree` takes `?maxDepth=` and `?timing=0`.
+
+```bash
+curl -s localhost:4600/summary
+curl -s "localhost:4600/tree?focus=handleRequest"
+curl -s localhost:4600/summary.json | jq .aggregate[0]
+```
+
+This is how you get a trace into anything that can make an HTTP request but
+cannot run Node — a shell script, a CI job, a different language.
+
+---
+
+## Editor
+
+```vim
+" ~/.vimrc
+source /path/to/cyclops/editors/cyclops.vim
+```
+
+| Command | Does |
+|---|---|
+| `:CyclopsTrace [target]` | trace and open the viewer |
+| `:CyclopsSummary` | summary in the quickfix window |
+| `:CyclopsTree` | the trace as an indented tree |
+| `:CyclopsFocus <name>` | one function's subtree |
+| `:CyclopsOpen` | reopen the viewer |
+
+`g:cyclops_bin` and `g:cyclops_port` override the binary and port.
+
+`:CyclopsSummary` reads the trace already on disk rather than re-running the
+program — a keybinding should not quietly re-execute something with side
+effects.
+
+---
+
+## Watching
+
+```bash
+cyclops src/ --watch
+```
+
+Re-traces on any change to any file in the program — the entry *and* everything
+it imports — and keeps serving. The viewer polls and rebuilds by itself, so the
+graph updates without a reload.
+
+```js
+import { watchTrace } from "cyclops";
+
+const ctl = watchTrace("src/", {
+  cwd: process.cwd(),
+  onResult: (r, reason) => console.log(reason, r.tree.roots.length),
+});
+ctl.refresh();   // re-trace now
+ctl.stop();      // detach
+```
+
+---
+
+## What cyclops will not trace
+
+Being explicit, so an agent does not read a partial trace as a complete one:
+
+- **Node builtins and `node_modules` are not instrumented.** `fs.readFileSync`
+  is a leaf. Cyclops traces your code, not the runtime's.
+- **A bare script with no imports** is traced fine, but only its own functions
+  become frames — there is nothing else for it to call.
+- **Only relative imports are followed.**
+- **Frames carry a basename, not a full path.** Two files with the same name in
+  different directories are ambiguous in one trace.
+- **A directory target picks one entry** (ranked by name) rather than running
+  every file. The choice is printed, never silent.
+- **A program that hangs** is cut off at 60 s, and the frames that never closed
+  are reported as such — the durations are partial.
+
+---
+
+## Dialects
+
+`.js` `.mjs` `.cjs` `.jsx` `.ts` `.mts` `.cts` `.tsx`
+
+Generators, async generators, decorators, private fields, class static blocks,
+top-level await, CommonJS, and callbacks deferred through any scheduler are all
+traced. Compiler helpers (`__privateGet`, `__decorateClass`, …) are filtered out
+so they do not bury your own calls.
