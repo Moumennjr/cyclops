@@ -25,6 +25,8 @@ export function fmt(v) {
         case "string": return `${JSON.stringify(v.value)}…`;
         case "circular": return "[Circular]";
         case "truncated": return `[${v.ctor ?? "…"}]`;
+        // A host handle: the type is the information, the internals are noise.
+        case "opaque": return `${v.ctor ?? "Object"} (opaque)`;
         case "error": return `${v.name}: ${v.message}`;
         case "unserializable": return `${v.ctor ?? "?"} (unserializable)`;
         case "…": return `…${v.length} more`;
@@ -147,6 +149,7 @@ export function valueType(v) {
         case "boolean": return "boolean";
         case "circular": return "object";
         case "truncated": return v.ctor ? String(v.ctor) : "object";
+        case "opaque": return v.ctor ? String(v.ctor) : "object";
         case "error": return "Error";
         case "…": return "array";
         default: return v.type;

@@ -28,12 +28,14 @@ import {
   frameTime,
   traceSpan,
   frameLocation,
+  valueType,
   describeFrame,
   toFlowModel,
   buildTreeIndex,
   subtreeIds,
   edgesBySource,
 } from "../src/public/flow-model.js";
+import { snapshot } from "../src/snapshot.js";
 import { startServer } from "../src/server.js";
 import {
   walkDir, expandGlob, resolveTargets, isTraceable, entryScore,
@@ -143,6 +145,50 @@ test("every frame records which file it came from", () => {
   assert.equal(frameLocation({ loc: { file: "a.js" } }), "a.js", "file alone when there is no line");
   assert.equal(frameLocation({}), null, "nothing to show when there is no location");
   assert.equal(frameLocation(null), null);
+});
+
+test("host handles are named rather than dumped", () => {
+  // Returning a Node timer handle from a traced function is completely
+  // ordinary -- `new Promise(r => setTimeout(r, 10))` returns one -- and its
+  // snapshot is ~40 fields of underscored internals with a self-referential node
+  // list. It says nothing about what the call did and dominates the output.
+  const timeout = Object.assign(Object.create({ constructor: { name: "Timeout" } }), {
+    _idleTimeout: 10,
+    _idleStart: 1,
+    _idleNext: { _idlePrev: null },
+    _idlePrev: { _idleNext: null },
+    expiry: 99,
+    msecs: 10,
+  });
+
+  const snap = snapshot(timeout);
+  assert.equal(snap.type, "opaque", "a host handle is opaque, not traversed");
+  assert.equal(snap.ctor, "Timeout", "the type is kept -- it is the useful half");
+  assert.equal(fmt(snap), "Timeout (opaque)");
+  assert.equal(valueType(snap), "Timeout", "and it reports as its real type");
+
+  // Ordinary data is untouched, including objects that happen to have
+  // underscore-prefixed keys: this must not become a way to hide data.
+  const data = { _a: 1, _b: 2, normal: 3 };
+  assert.deepEqual(snapshot(data), { _a: 1, _b: 2, normal: 3 });
+
+  // ...and the heuristic catches host objects this list has not heard of, while
+  // leaving alone an object that merely has one underscore key among normal ones.
+  assert.equal(
+    snapshot({ _idleTimeout: 1, _handle: 2, _destroyed: false, _repeat: null }).type,
+    "opaque",
+    "all-underscore keys plus host markers is enough",
+  );
+  assert.equal(
+    snapshot({ _idleTimeout: 1, real: 2, keep: 3, mine: 4 }).type,
+    undefined,
+    "one underscore key among ordinary ones is just data",
+  );
+  assert.equal(
+    snapshot({ _a: 1, _b: 2, _c: 3, _d: 4 }).type,
+    undefined,
+    "four underscore keys alone are not enough -- no host markers",
+  );
 });
 
 test("a directory expands to its traceable files, skipping the usual noise", () => {
