@@ -138,6 +138,9 @@ export function prepare(entry, { token = String(process.pid) } = {}) {
     warnings,
     files,
     instrumented: shadowOf.size,
+    // Every source file that went into this trace, so a watcher can re-run on
+    // a change to any of them and not just the entry.
+    sources: [entryAbs, ...[...shadowOf.keys()]],
   };
 }
 
@@ -219,6 +222,9 @@ export function traceFile(entry, options = {}) {
 
   return {
     ok: tree !== null,
+    // The source files that were instrumented, entry first. A watcher needs
+    // these to know what a change to the program means; the CLI does not.
+    sourceFiles: prepared.sources,
     // A run that crashed still yields a tree; saying so is better than
     // pretending the program failed outright.
     error: tree
