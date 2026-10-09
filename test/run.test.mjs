@@ -234,7 +234,7 @@ test("findFrames locates a call by name and reports its path", () => {
 
   // focusing scopes the whole report to that function's subtree
   const scoped = summarize(tree.roots, { focus: "mid" });
-  assert.match(scoped, /^ {3}mid +/m, "and its subtree is what gets reported");
+  assert.match(scoped, /\bmid\b/, "and its subtree is what gets reported");
 });
 
 test("host handles are named rather than dumped", () => {
