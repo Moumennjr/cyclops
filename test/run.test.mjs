@@ -37,6 +37,10 @@ import {
 } from "../src/public/flow-model.js";
 import { snapshot } from "../src/snapshot.js";
 import { watchTrace } from "../src/watch.js";
+// The vim/neovim plugin implements these two helpers in vimscript. They are
+// mirrored here so the *algorithm* is covered by the suite even on a machine
+// with no vim installed; the editor binding itself is not.
+import { flattenForEditor, aggregateForEditor } from "../src/editor.js";
 import {
   renderTree, renderFlat, aggregate, selfDuration,
 } from "../src/render.js";
@@ -152,6 +156,32 @@ test("every frame records which file it came from", () => {
   assert.equal(frameLocation({ loc: { file: "a.js" } }), "a.js", "file alone when there is no line");
   assert.equal(frameLocation({}), null, "nothing to show when there is no location");
   assert.equal(frameLocation(null), null);
+});
+
+test("the editor helpers flatten a tree by depth and aggregate by name", () => {
+  // editors/cyclops.vim reimplements these in vimscript for :CyclopsTree and
+  // :CyclopsSummary. The algorithm is what can be tested without vim; the
+  // binding is not, so it is kept small enough to be obviously right by reading.
+  const src = `
+    function leaf() { return 1; }
+    function mid() { return leaf() + leaf(); }
+    function top() { return mid(); }
+    top();
+  `;
+  const { tree } = runTree(src);
+
+  const flat = flattenForEditor(tree.roots);
+  assert.equal(flat.length, 4, "every frame appears once");
+  assert.deepEqual(flat.map((f) => [f.name, f.depth]), [
+    ["top", 0], ["mid", 1], ["leaf", 2], ["leaf", 2],
+  ], "depth-first, level by level, with the repeated call kept");
+  assert.ok(flat.every((f) => typeof f.dur === "number"), "each carries a duration");
+
+  const agg = aggregateForEditor(tree.roots);
+  const byName = Object.fromEntries(agg.map((r) => [r.name, r]));
+  assert.equal(byName.leaf.count, 2, "two calls collapse to one row");
+  assert.ok(byName.leaf.total >= 0);
+  assert.equal(agg.reduce((n, r) => n + r.count, 0), 4, "counts add up to the frame count");
 });
 
 test("watch re-traces when any file in the program changes", async () => {
