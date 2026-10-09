@@ -158,6 +158,75 @@ test("every frame records which file it came from", () => {
   assert.equal(frameLocation(null), null);
 });
 
+test("the server serves the tree as text and as JSON", async () => {
+  // The browser gets /tree.json. A terminal, an editor, a script and an agent
+  // all need the same information in shapes they can read, and re-implementing
+  // the formatting in each of those is how four slightly different answers end
+  // up describing one trace.
+  const dir = mkdtempSync(join(tmpdir(), "cyc-http-"));
+  const treeFile = join(dir, "tree.json");
+  writeTree(treeFile, {
+    roots: [
+      { id: 1, name: "load", args: [1], loc: { file: "a.js", line: 2 },
+        return: 10, error: null, startedAt: 100, endedAt: 130,
+        duration: 30, children: [
+          { id: 2, name: "fetch1", args: [], loc: { file: "a.js", line: 5 },
+            return: 9, error: null, startedAt: 105, endedAt: 125,
+            duration: 20, children: [] },
+        ] },
+      { id: 3, name: "boom", args: [], loc: { file: "b.js", line: 1 },
+        return: { type: "undefined" }, error: { name: "TypeError", message: "x" },
+        startedAt: 140, endedAt: 141, duration: 1, children: [] },
+    ],
+  });
+
+  const { url, close } = await startServer({ port: 4730, treePath: treeFile });
+  try {
+    const get = async (p) => {
+      const r = await fetch(url + p);
+      return { status: r.status, type: r.headers.get("content-type"), text: await r.text() };
+    };
+
+    const summary = await get("/summary");
+    assert.equal(summary.status, 200);
+    assert.match(summary.type, /text\/plain/, "the text view is text/plain");
+    assert.match(summary.text, /3 frames . 2 roots/, "and states the shape");
+    assert.match(summary.text, /TypeError: x/, "and reports the error");
+
+    const tree = await get("/tree?maxDepth=2");
+    assert.equal(tree.status, 200);
+    assert.match(tree.text, /load\( 1 \) @ a\.js:2/, "the tree view names the file");
+
+    const focused = await get("/summary?focus=fetch1");
+    assert.equal(focused.status, 200);
+    assert.match(focused.text, /1 frame/, "focus scopes the whole report");
+
+    const json = JSON.parse((await get("/summary.json")).text);
+    assert.equal(json.stats.frames, 3, "load, its child, and boom");
+    assert.equal(json.errors.length, 1, "errors come back structured");
+    assert.equal(json.errors[0].name, "TypeError");
+
+    const flat = JSON.parse((await get("/flat.json")).text);
+    // Level order, not depth-first: the flat view is for scanning by depth, and
+    // the depth is in the payload so a consumer can rebuild the nesting.
+    assert.deepEqual(flat.frames.map((f) => f.name), ["load", "boom", "fetch1"]);
+    assert.deepEqual(flat.frames.map((f) => f.depth), [0, 0, 1]);
+  } finally {
+    await close();
+  }
+
+  // with no trace at all, every view says so rather than 500ing
+  const empty = await startServer({ port: 4731, treePath: join(dir, "absent.json") });
+  try {
+    for (const p of ["/summary", "/tree", "/summary.json", "/tree.json"]) {
+      assert.equal((await fetch(empty.url + p)).status, 404, p + " 404s with no trace");
+    }
+  } finally {
+    await empty.close();
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("the editor helpers flatten a tree by depth and aggregate by name", () => {
   // editors/cyclops.vim reimplements these in vimscript for :CyclopsTree and
   // :CyclopsSummary. The algorithm is what can be tested without vim; the

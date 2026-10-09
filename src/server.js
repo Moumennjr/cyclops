@@ -3,6 +3,9 @@ import { createServer } from "node:http";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { renderTree, renderFlat, aggregate } from "./render.js";
+import { flattenForEditor } from "./editor.js";
+import { summarize, findFrames, stats, errorReport } from "./analyze.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DIST = join(here, "..", "dist");
@@ -108,6 +111,69 @@ export async function startServer({ port = 4600, treePath, distDir = DEFAULT_DIS
         JSON.stringify({ version: tree ? tree.version : 0 }),
         { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
       );
+    }
+
+    // Text views of the same tree, for anything that is not the browser:
+    // a terminal, an editor, a script, an agent. The viewer gets /tree.json;
+    // these are the shapes the rest of the world needs.
+    if (pathname === "/summary" || pathname === "/tree" || pathname === "/flat") {
+      const tree = readTree(treeFile);
+      if (!tree) {
+        return send(res, 404, JSON.stringify({ error: "no trace yet" }), {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+        });
+      }
+      const params = new URL(req.url, "http://localhost").searchParams;
+      const focus = params.get("focus");
+      const roots = focus
+        ? findFrames(tree.roots, focus).map((h) => h.frame)
+        : tree.roots;
+
+      const body =
+        pathname === "/summary"
+          ? summarize(roots, { focus, title: treePath })
+          : pathname === "/tree"
+            ? renderTree(roots, {
+              maxDepth: Number(params.get("maxDepth") || 12),
+              timing: params.get("timing") !== "0",
+            })
+            : renderFlat(roots, { timing: params.get("timing") !== "0" });
+
+      return send(res, 200, body, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      });
+    }
+
+    // JSON forms of the same views, for a consumer that wants the same
+    // content machine-readable rather than as text.
+    if (pathname === "/summary.json" || pathname === "/flat.json") {
+      const tree = readTree(treeFile);
+      if (!tree) {
+        return send(res, 404, JSON.stringify({ error: "no trace yet" }), {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+        });
+      }
+      const params = new URL(req.url, "http://localhost").searchParams;
+      const focus = params.get("focus");
+      const roots = focus
+        ? findFrames(tree.roots, focus).map((h) => h.frame)
+        : tree.roots;
+
+      const payload =
+        pathname === "/summary.json"
+          ? { stats: stats(roots), aggregate: aggregate(roots), errors: errorReport(roots) }
+          : {
+            frames: flattenForEditor(roots).map((f) => ({
+              name: f.name, depth: f.depth, duration: f.dur,
+            })),
+          };
+      return send(res, 200, JSON.stringify(payload, null, 2), {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      });
     }
 
     if (pathname === "/whoami") {
