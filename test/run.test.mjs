@@ -36,6 +36,7 @@ import {
   edgesBySource,
 } from "../src/public/flow-model.js";
 import { snapshot } from "../src/snapshot.js";
+import { watchTrace } from "../src/watch.js";
 import {
   renderTree, renderFlat, aggregate, selfDuration,
 } from "../src/render.js";
@@ -151,6 +152,88 @@ test("every frame records which file it came from", () => {
   assert.equal(frameLocation({ loc: { file: "a.js" } }), "a.js", "file alone when there is no line");
   assert.equal(frameLocation({}), null, "nothing to show when there is no location");
   assert.equal(frameLocation(null), null);
+});
+
+test("watch re-traces when any file in the program changes", async () => {
+  // The workflow this exists for is edit -> see what changed, so the watch set
+  // has to be the whole program. Watching only the entry was the first
+  // version's bug: change step.js and nothing happened, because step.js was not
+  // the file being watched even though it is what the entry calls.
+  const root = mkdtempSync(join(tmpdir(), "cyc-watch-"));
+  mkdirSync(join(root, "out"), { recursive: true });
+  writeFileSync(join(root, "step.js"), "export function step(n){ return n * 10; }\n");
+  writeFileSync(join(root, "app.js"),
+    'import { step } from "./step.js";\nfunction run(n){ return step(n) + 1; }\nconsole.log("v", run(2));\n');
+
+  const results = [];
+  const ctl = watchTrace("app.js", {
+    cwd: root,
+    debounceMs: 60,
+    onResult: (r, reason) => results.push({ reason, stdout: r.stdout.trim() }),
+  });
+
+  try {
+    const watched = ctl.watchedFiles().map((f) => f.split(/[\\/]/).pop()).sort();
+    assert.deepEqual(watched, ["app.js", "step.js"],
+      "the entry and the file it imports are both watched");
+
+    assert.equal(results.length, 1, "the initial trace ran");
+    assert.equal(results[0].reason, "initial");
+    assert.equal(results[0].stdout, "v 21");
+
+    // a change to a dependency, not the entry
+    writeFileSync(join(root, "step.js"), "export function step(n){ return n * 100; }\n");
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(results.length, 2, "a change to an imported file re-traced");
+    assert.match(results[1].reason, /step\.js/, "and said which file changed");
+    assert.equal(results[1].stdout, "v 201", "the new behaviour is observed");
+
+    // a rapid burst is debounced into one run, not one per write
+    for (let i = 0; i < 5; i++) {
+      writeFileSync(join(root, "app.js"),
+        `import { step } from "./step.js";\nfunction run(n){ return step(n) + ${i}; }\nconsole.log("v", run(2));\n`);
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(results.length, 3,
+      "five writes in a row produce one re-trace, not five");
+
+    ctl.refresh();
+    assert.equal(results.length, 4, "refresh() re-traces on demand");
+  } finally {
+    ctl.stop();
+  }
+
+  // stopping detaches: a later write must not run the program
+  writeFileSync(join(root, "step.js"), "export function step(n){ return 0; }\n");
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(results.length, 4, "a stopped watcher stays stopped");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("watch starts informed when the caller already ran the program", () => {
+  // The CLI traces once, then watches. Starting the watcher with initial:true
+  // would run the program a second time and print the same summary twice.
+  const root = mkdtempSync(join(tmpdir(), "cyc-watch2-"));
+  writeFileSync(join(root, "app.js"), 'function f(){ return 1; }\nconsole.log(f());\n');
+
+  let runs = 0;
+  const ctl = watchTrace("app.js", {
+    cwd: root,
+    debounceMs: 60,
+    knownSources: [join(root, "app.js")],
+    onResult: () => runs++,
+  });
+  try {
+    assert.equal(runs, 0, "no trace ran: the caller supplied the file list");
+    assert.deepEqual(
+      ctl.watchedFiles().map((f) => f.split(/[\\/]/).pop()),
+      ["app.js"],
+      "but it is already watching",
+    );
+  } finally {
+    ctl.stop();
+  }
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("summarize answers where the time went, and separates self from total", () => {

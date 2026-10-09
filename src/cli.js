@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { traceToFile } from "./engine.js";
+import { watchTrace } from "./watch.js";
+import { summarize } from "./analyze.js";
 import { startServer } from "./server.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -60,6 +62,7 @@ function parseArgs(argv) {
   let noServer = false;
   let noOpen = false;
   let serve = false;
+  let watch = false;
   let help = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -68,6 +71,7 @@ function parseArgs(argv) {
     else if (a === "--no-server") noServer = true;
     else if (a === "--no-open") noOpen = true;
     else if (a === "--serve") serve = true;
+    else if (a === "--watch") watch = true;
     else if (a === "--no-vite") continue; // deprecated no-op: the viewer ships built
     else if (a === "--help" || a === "-h") { help = true; continue; }
     else if (!a.startsWith("-")) files.push(a);
@@ -76,11 +80,11 @@ function parseArgs(argv) {
       process.exit(1);
     }
   }
-  return {files, port, noServer, noOpen, serve, help};
+  return {files, port, noServer, noOpen, serve, watch, help};
 }
 
 function printUsage() {
-  console.log(`usage: cyclops <file|dir|glob> [more...] [--port N] [--serve] [--no-server] [--no-open]
+  console.log(`usage: cyclops <file|dir|glob> [more...] [--port N] [--serve] [--watch] [--no-server] [--no-open]
 
   traces a file, a directory or a glob, writes the call tree to out/tree.json,
   and serves the viewer at http://localhost:${DEFAULT_PORT} until Ctrl+C
@@ -93,6 +97,9 @@ function printUsage() {
     cyclops a.js b.ts           the first is the entry, the rest are
                                 instrumented so its imports resolve
 
+  --watch re-traces on every change to the program, not just the entry, and
+  keeps serving; the viewer already picks the new trace up by itself.
+
   traced dialects: .js .mjs .cjs .jsx .ts .mts .cts .tsx
   (generators, decorators, top-level await, private fields and async/await are
   all traced; compiler helpers are kept out of the tree)
@@ -102,7 +109,7 @@ function printUsage() {
 }
 
 async function main() {
-  const {files, port, noServer, noOpen, serve, help} = parseArgs(process.argv.slice(2));
+  const {files, port, noServer, noOpen, serve, watch, help} = parseArgs(process.argv.slice(2));
   if (help || !files.length) {
     printUsage();
     process.exit(help ? 0 : 1);
@@ -144,8 +151,39 @@ async function main() {
     console.error(`[cyclops] instrumented ${result.instrumented} imported file(s) too`);
   }
 
+  // --watch keeps re-tracing while serving. The viewer polls /tree.json every
+  // second and rebuilds when `version` changes, so it picks up each new trace
+  // with no reload -- this only has to re-run the tracer and write the file.
+  let controller = null;
+  if (watch) {
+    controller = watchTrace(files, {
+      cwd: process.cwd(),
+      outFile: result.outFile,
+      // The trace above already happened and its result is in hand, so starting
+      // with initial:false would leave the watcher with nothing to watch --
+      // watchTrace learns what to watch from the files a trace instrumented.
+      // Passing them through keeps the two from running the program twice.
+      initial: true,
+      knownSources: result.sourceFiles,
+      onResult: (r, reason) => {
+        if (!r.ok) {
+          console.error(`[cyclops] re-trace failed (${reason}): ${r.error}`);
+          return;
+        }
+        process.stdout.write(r.stdout ?? "");
+        const s = summarize(r.tree.roots);
+        const head = s.split("\n")[0];
+        console.error(`[cyclops] ${reason} → ${head}`);
+      },
+      onError: (err, reason) => {
+        console.error(`[cyclops] ${reason}: ${err}`);
+      },
+    });
+    console.error(`[cyclops] watching ${controller.watchedFiles().length} file(s)`);
+  }
+
   // interactive runs serve until Ctrl+C; piped/CI runs never hang
-  const shouldServe = !noServer && (process.stderr.isTTY || serve);
+  const shouldServe = !noServer && (process.stderr.isTTY || serve || watch);
   if (!shouldServe) process.exit(result.exitCode ?? 0);
 
   ensureBuild();
@@ -158,8 +196,13 @@ async function main() {
 
   let exitCode = result.exitCode ?? 0;
   if (server) {
-    console.error("[cyclops] serving this tree until Ctrl+C ...");
+    console.error(
+      watch
+        ? "[cyclops] serving, and re-tracing on every change, until Ctrl+C ..."
+        : "[cyclops] serving this tree until Ctrl+C ...",
+    );
     exitCode = await waitForSignal();
+    if (controller) controller.stop();
     await close();
   }
   process.exit(exitCode);

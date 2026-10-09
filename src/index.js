@@ -20,6 +20,7 @@ export {
 export { computeStats, fmt, valueType, toFlowModel } from "./public/flow-model.js";
 export { snapshot } from "./snapshot.js";
 export { splitTree, writeTree } from "./treeio.js";
+export { watchTrace, isWatchable } from "./watch.js";
 export { TRACEABLE, isTraceable, resolveTargets } from "./targets.js";
 export { startServer } from "./server.js";
 
