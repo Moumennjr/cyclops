@@ -36,6 +36,12 @@ import {
   edgesBySource,
 } from "../src/public/flow-model.js";
 import { snapshot } from "../src/snapshot.js";
+import {
+  renderTree, renderFlat, aggregate, selfDuration,
+} from "../src/render.js";
+import {
+  summarize, errorReport, findFrames as locateFrames, stats,
+} from "../src/analyze.js";
 import { startServer } from "../src/server.js";
 import {
   walkDir, expandGlob, resolveTargets, isTraceable, entryScore,
@@ -145,6 +151,90 @@ test("every frame records which file it came from", () => {
   assert.equal(frameLocation({ loc: { file: "a.js" } }), "a.js", "file alone when there is no line");
   assert.equal(frameLocation({}), null, "nothing to show when there is no location");
   assert.equal(frameLocation(null), null);
+});
+
+test("summarize answers where the time went, and separates self from total", () => {
+  // The point of self time: `outer` has the largest total because everything is
+  // inside it, and fixing it would mean fixing something else. Only self time
+  // says which function is actually doing the work.
+  const src = `
+    function work(n) { let s = 0; for (let i = 0; i < n; i++) s += i; return s; }
+    function hot() { return work(2000000); }
+    function mid() { return hot() + hot(); }
+    function outer() { return mid() + mid() + mid(); }
+    outer();
+  `;
+  const { tree } = runTree(src);
+  const report = summarize(tree.roots, { title: "fixture" });
+
+  assert.match(report, /^# fixture$/m, "the title is used when given");
+  assert.match(report, /\d+ frames . \d+ roots? . depth \d+/, "the shape is stated first");
+  assert.match(report, /where the time went/, "the first question is where time went");
+
+  const rows = report.split("\n");
+  const workRow = rows.find((r) => r.includes("work"));
+  const outerRow = rows.find((r) => r.includes("outer"));
+  assert.ok(workRow && outerRow, "both appear in the timing table");
+  assert.match(workRow, /total/);
+  assert.match(workRow, /self/);
+
+  const agg = aggregate(tree.roots);
+  const work = agg.find((r) => r.name === "work");
+  const outer = agg.find((r) => r.name === "outer");
+  assert.ok(work.selfMs >= work.totalMs - 1, "work does the actual looping");
+  assert.ok(
+    outer.selfMs < work.selfMs,
+    "outer's own time is far smaller even though its total is the largest",
+  );
+  assert.equal(agg.filter((r) => r.name === "hot").length, 1, "one row per name");
+  assert.equal(agg.find((r) => r.name === "hot").calls, 6, "with the true call count");
+
+  // `anonymous` frames are excluded from the table: they are noise, not names.
+  assert.ok(
+    !report.includes("anonymous"),
+    "anonymous callbacks do not pollute the summary",
+  );
+});
+
+test("summarize reports errors with how far each one propagated", () => {
+  const src = `
+    function boom() { throw new TypeError("kaboom"); }
+    function mid() { return boom(); }
+    function top() { return mid(); }
+    try { top(); } catch (e) {}
+  `;
+  const { tree } = runTree(src);
+  const report = summarize(tree.roots);
+
+  assert.match(report, /## errors/);
+  assert.match(report, /TypeError: kaboom/, "the error is named");
+  assert.match(report, /big\.js|prog\.js/, "and located");
+
+  const errors = errorReport(tree.roots);
+  assert.equal(errors.length, 1, "one distinct error, not three");
+  assert.equal(errors[0].frames, 3, "which crossed all three frames");
+  assert.equal(errors[0].deepest, 2, "and reached depth 2");
+});
+
+test("findFrames locates a call by name and reports its path", () => {
+  const src = `
+    function leaf() { return 1; }
+    function mid() { return leaf(); }
+    function top() { return mid(); }
+    top();
+  `;
+  const { tree } = runTree(src);
+
+  const hits = locateFrames(tree.roots, "leaf");
+  assert.equal(hits.length, 1);
+  assert.deepEqual(hits[0].path, ["top", "mid", "leaf"], "the path from the root");
+  assert.equal(hits[0].depth, 2);
+
+  assert.equal(locateFrames(tree.roots, "nothing-like-this").length, 0);
+
+  // focusing scopes the whole report to that function's subtree
+  const scoped = summarize(tree.roots, { focus: "mid" });
+  assert.match(scoped, /^ {3}mid +/m, "and its subtree is what gets reported");
 });
 
 test("host handles are named rather than dumped", () => {
