@@ -37,6 +37,7 @@ import {
 } from "../src/public/flow-model.js";
 import { snapshot } from "../src/snapshot.js";
 import { watchTrace } from "../src/watch.js";
+import { trace } from "../src/engine.js";
 // The vim/neovim plugin implements these two helpers in vimscript. They are
 // mirrored here so the *algorithm* is covered by the suite even on a machine
 // with no vim installed; the editor binding itself is not.
@@ -156,6 +157,32 @@ test("every frame records which file it came from", () => {
   assert.equal(frameLocation({ loc: { file: "a.js" } }), "a.js", "file alone when there is no line");
   assert.equal(frameLocation({}), null, "nothing to show when there is no location");
   assert.equal(frameLocation(null), null);
+});
+
+test("the engine reports which files a trace instrumented", () => {
+  // watch.js reads this to decide what to watch, and the plugin reports it as
+  // "N imported file(s) instrumented". If it silently went missing, --watch
+  // would watch nothing and look like it was working. Nothing else would fail.
+  const root = mkdtempSync(join(tmpdir(), "cyc-srcfiles-"));
+  writeFileSync(join(root, "step.js"), "export function step(n){ return n * 10; }\n");
+  writeFileSync(join(root, "app.js"),
+    'import { step } from "./step.js";\nfunction run(n){ return step(n) + 1; }\nconsole.log(run(2));\n');
+
+  const result = trace("app.js", { cwd: root });
+  assert.equal(result.ok, true);
+  assert.equal(result.instrumented, 1, "one neighbour");
+
+  const names = result.sourceFiles.map((f) => f.split(/[\\/]/).pop()).sort();
+  assert.deepEqual(names, ["app.js", "step.js"],
+    "the entry and its import, so a change to either can re-trigger");
+
+  // A single self-contained file still reports itself, not an empty list.
+  writeFileSync(join(root, "solo.js"), "function f(){ return 1; }\nconsole.log(f());\n");
+  const solo = trace("solo.js", { cwd: root });
+  assert.equal(solo.ok, true);
+  assert.equal(solo.instrumented, 0, "no neighbours");
+  assert.equal(solo.sourceFiles.length, 1, "but it still names its own file");
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("the server serves the tree as text and as JSON", async () => {
