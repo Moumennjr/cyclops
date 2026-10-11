@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { traceToFile } from "./engine.js";
 import { watchTrace } from "./watch.js";
-import { summarize } from "./analyze.js";
+import { summarize, findFrames } from "./analyze.js";
+import { renderTree, renderFlat } from "./render.js";
 import { startServer } from "./server.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -63,6 +64,9 @@ function parseArgs(argv) {
   let noOpen = false;
   let serve = false;
   let watch = false;
+  let format = null;      // summary | tree | flat -- print and exit
+  let focus = null;
+  let maxFrames = 0;
   let help = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -72,6 +76,11 @@ function parseArgs(argv) {
     else if (a === "--no-open") noOpen = true;
     else if (a === "--serve") serve = true;
     else if (a === "--watch") watch = true;
+    else if (a === "--print" || a === "--summary") format = format || "summary";
+    else if (a === "--tree") format = "tree";
+    else if (a === "--flat") format = "flat";
+    else if (a === "--focus") focus = argv[++i] || null;
+    else if (a === "--max-frames") maxFrames = Number(argv[++i]) || 0;
     else if (a === "--no-vite") continue; // deprecated no-op: the viewer ships built
     else if (a === "--help" || a === "-h") { help = true; continue; }
     else if (!a.startsWith("-")) files.push(a);
@@ -80,11 +89,11 @@ function parseArgs(argv) {
       process.exit(1);
     }
   }
-  return {files, port, noServer, noOpen, serve, watch, help};
+  return {files, port, noServer, noOpen, serve, watch, format, focus, maxFrames, help};
 }
 
 function printUsage() {
-  console.log(`usage: cyclops <file|dir|glob> [more...] [--port N] [--serve] [--watch] [--no-server] [--no-open]
+  console.log(`usage: cyclops <file|dir|glob> [more...] [options]
 
   traces a file, a directory or a glob, writes the call tree to out/tree.json,
   and serves the viewer at http://localhost:${DEFAULT_PORT} until Ctrl+C
@@ -96,6 +105,11 @@ function printUsage() {
     cyclops "src/**/*.ts"       a glob
     cyclops a.js b.ts           the first is the entry, the rest are
                                 instrumented so its imports resolve
+
+  output:
+    --summary, --tree, --flat   print the trace as text and exit, no browser
+    --focus <name>              scope the output to one function's subtree
+    --max-frames <n>            stop capturing after n frames (default 250000)
 
   --watch re-traces on every change to the program, not just the entry, and
   keeps serving; the viewer already picks the new trace up by itself.
@@ -109,7 +123,8 @@ function printUsage() {
 }
 
 async function main() {
-  const {files, port, noServer, noOpen, serve, watch, help} = parseArgs(process.argv.slice(2));
+  const {files, port, noServer, noOpen, serve, watch, format, focus, maxFrames, help} =
+    parseArgs(process.argv.slice(2));
   if (help || !files.length) {
     printUsage();
     process.exit(help ? 0 : 1);
@@ -121,6 +136,7 @@ async function main() {
   const result = traceToFile(files, {
     cwd: process.cwd(),
     keepShadows: false,
+    maxFrames,
   });
 
   if (!result.ok) {
@@ -180,6 +196,23 @@ async function main() {
       },
     });
     console.error(`[cyclops] watching ${controller.watchedFiles().length} file(s)`);
+  }
+
+  // --summary/--tree/--flat print the trace as text and stop. The same
+  // renderers the agent plugin and the HTTP views use, so the three surfaces
+  // cannot disagree about what a trace says.
+  if (format) {
+    const roots = focus
+      ? findFrames(result.tree.roots, focus).map((h) => h.frame)
+      : result.tree.roots;
+    process.stdout.write(
+      format === "tree"
+        ? renderTree(roots, { maxDepth: 20, timing: true })
+        : format === "flat"
+          ? renderFlat(roots, { timing: true })
+          : summarize(roots, { focus, title: result.entry }) + "\n",
+    );
+    process.exit(result.exitCode ?? 0);
   }
 
   // interactive runs serve until Ctrl+C; piped/CI runs never hang
