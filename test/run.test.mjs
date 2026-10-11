@@ -38,6 +38,7 @@ import {
 import { snapshot } from "../src/snapshot.js";
 import { watchTrace } from "../src/watch.js";
 import { trace } from "../src/engine.js";
+import { diffTrees, renderDiff } from "../src/diff.js";
 // The vim/neovim plugin implements these two helpers in vimscript. They are
 // mirrored here so the *algorithm* is covered by the suite even on a machine
 // with no vim installed; the editor binding itself is not.
@@ -739,6 +740,162 @@ test("ordinary method calls are not mistaken for schedulers", () => {
     2,
     "only the two real calls of use() are frames",
   );
+});
+
+test("a large trace survives the pipe instead of being truncated away", () => {
+  // The bug this covers was invisible in every small fixture: writes to
+  // process.stderr are async when stderr is a pipe, so on "exit" the tail of
+  // the write is dropped, the payload fails to parse, and the result looks
+  // exactly like a program that produced no trace.
+  const root = mkdtempSync(join(tmpdir(), "cyc-big-"));
+  // ~3,000 frames: comfortably past the 146 kB that used to survive, and far
+  // below anything that would make the test slow.
+  writeFileSync(join(root, "spin.js"), [
+    "function spin(n){ let s=0; for(let i=0;i<n;i++) s+=i; return s; }",
+    "function go(){ let t=0; for(let k=0;k<3000;k++) t+=spin(100); return t; }",
+    "go();",
+  ].join("\n"));
+
+  const result = trace("spin.js", { cwd: root });
+  assert.equal(result.ok, true,
+    "the trace was recovered, not lost to a truncated write");
+  assert.equal(result.exitCode, 0, "the program itself succeeded");
+  assert.equal(result.tree.droppedFrames, undefined,
+    "and it was not capped, so nothing was dropped");
+
+  let frames = 0;
+  (function walk(list) {
+    for (const f of list || []) { frames++; walk(f.children); }
+  })(result.tree.roots);
+  assert.ok(frames > 3000,
+    `expected the whole trace, got ${frames} frames`);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("the frame cap stops capture without disturbing the program", () => {
+  const root = mkdtempSync(join(tmpdir(), "cyc-cap-"));
+  writeFileSync(join(root, "loop.js"), [
+    "function noop(x){ return x; }",
+    "function go(){ let s=0; for(let i=0;i<5000;i++) s+=noop(i); return s; }",
+    'console.log("done", go());',
+  ].join("\n"));
+
+  const capped = trace("loop.js", { cwd: root, maxFrames: 200 });
+  assert.equal(capped.ok, true, "a capped run still produces a tree");
+  assert.equal(capped.exitCode, 0, "and the program still finished");
+  assert.match(capped.stdout, /done 12497500/,
+    "with its own output intact -- the cap must not change behaviour");
+
+  let kept = 0;
+  (function walk(list) {
+    for (const f of list || []) { kept++; walk(f.children); }
+  })(capped.tree.roots);
+  assert.ok(kept <= 200 + 2, `kept ${kept} frames, which exceeds the cap`);
+  assert.ok(capped.droppedFrames > 4500,
+    `dropped ${capped.droppedFrames}, which is far too few`);
+});
+
+test("a capped trace is reported as capped, not as a complete observation", () => {
+  // The failure mode: 2,000 frames captured and the rest dropped, rendered as
+  // "noop 1999 calls" with nothing to say otherwise. A reader -- or an agent --
+  // takes that as the whole story.
+  const root = mkdtempSync(join(tmpdir(), "cyc-capreport-"));
+  writeFileSync(join(root, "loop.js"), [
+    "function noop(x){ return x; }",
+    "function go(){ let s=0; for(let i=0;i<5000;i++) s+=noop(i); return s; }",
+    "go();",
+  ].join("\n"));
+
+  const capped = trace("loop.js", { cwd: root, maxFrames: 300 });
+  const report = summarize(capped.tree.roots, {
+    droppedFrames: capped.droppedFrames,
+  });
+
+  assert.match(report, /!! \d+ frames not captured/,
+    "the summary leads with the caveat");
+  assert.match(report, /max-frames/, "and names the way to fix it");
+  assert.match(
+    report,
+    new RegExp(`!! ${capped.droppedFrames} frames not captured`),
+    "with the real dropped count, not a rounded or invented one",
+  );
+
+  // An uncapped trace must not carry the warning, or it becomes noise.
+  const uncapped = summarize([{ id: 1, name: "f", args: [], loc: {}, return: 1,
+    error: null, startedAt: 0, endedAt: 1, duration: 1, children: [] }]);
+  assert.doesNotMatch(uncapped, /not captured/,
+    "a complete trace is not reported as incomplete");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("diffing two traces names the function that got slower", () => {
+  // The question a tracer exists for, and one a single tree cannot answer.
+  const mk = (name, selfMs, times) => ({
+    id: 1, name, args: [], loc: { file: "a.js", line: 1 },
+    return: 0, error: null, startedAt: 0, endedAt: selfMs, duration: selfMs,
+    children: Array.from({ length: times }, () => ({
+      id: 2, name: "leaf", args: [], loc: { file: "a.js", line: 2 },
+      return: 0, error: null, startedAt: 0, endedAt: 0, duration: 0,
+      children: [],
+    })),
+  });
+
+  const before = [{ ...mk("outer", 50, 2), children: [
+    { ...mk("work", 40, 1), children: [] },
+  ] }];
+  const after = [{ ...mk("outer", 50, 2), children: [
+    { ...mk("work", 90, 1), children: [] },
+    { id: 9, name: "extra", args: [], loc: { file: "a.js", line: 8 },
+      return: 0, error: null, startedAt: 0, endedAt: 1, duration: 1,
+      children: [] },
+  ] }];
+
+  const d = diffTrees(before, after);
+  assert.equal(d.slower.length, 1, "one function regressed");
+  assert.equal(d.slower[0].name, "work");
+  assert.equal(d.slower[0].change, 50, "by the right amount");
+  assert.equal(d.slower[0].changePct, "+125%");
+  assert.equal(d.added.length, 1, "one function is newly called");
+  assert.equal(d.added[0].name, "extra");
+
+  const text = renderDiff(d);
+  assert.match(text, /## slower/);
+  assert.match(text, /work/);
+  assert.match(text, /## new calls/);
+
+  // noise below the floor is suppressed rather than reported as a regression
+  const tiny = diffTrees(
+    [{ ...mk("outer", 5, 1), children: [] }],
+    [{ ...mk("outer", 5.4, 1), children: [] }],
+    { noiseMs: 1 },
+  );
+  assert.equal(tiny.slower.length, 0, "sub-millisecond jitter is not a regression");
+  assert.match(renderDiff(tiny), /no measured difference/);
+});
+
+test("diffing reports errors that appeared and went away", () => {
+  const ok = (id, name, extra = {}) => ({
+    id, name, args: [], loc: { file: "a.js", line: 1 },
+    return: 1, error: null, startedAt: 0, endedAt: 1, duration: 1,
+    children: [], ...extra,
+  });
+  const boom = (id, name, msg) => ({
+    id, name, args: [], loc: { file: "a.js", line: 1 },
+    return: { type: "undefined" },
+    error: { name: "RangeError", message: msg },
+    startedAt: 0, endedAt: 1, duration: 1, children: [],
+  });
+
+  const before = [ok(1, "main"), boom(2, "check", "old problem")];
+  const after = [ok(1, "main"), boom(3, "check", "new problem")];
+
+  const d = diffTrees(before, after);
+  assert.equal(d.errors.introduced.length, 1, "a new error appeared");
+  assert.match(d.errors.introduced[0].message, /new problem/);
+  assert.equal(d.errors.resolved.length, 1, "and the old one went away");
+  assert.match(d.errors.resolved[0].message, /old problem/);
+  assert.match(renderDiff(d), /## errors introduced/);
 });
 
 test("JSX lowers with the automatic runtime, so React need not be in scope", () => {
