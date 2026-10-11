@@ -1,15 +1,34 @@
 # Using cyclops as a plugin
 
-Cyclops is four things that share one engine:
+Cyclops is one engine with five faces on it:
 
 ```
   CLI          cyclops src/ --watch          you, at a terminal
+  text         cyclops src/ --summary        you, in a pipe
   browser      http://localhost:4600         you, exploring a trace
   editor       :CyclopsTrace :CyclopsSummary  you, while editing
   plugin       cyclops_trace                  an agent, reading a trace as text
 ```
 
-All four call `src/engine.js`. None of them re-implement tracing.
+All of them call `src/engine.js`. None of them re-implement tracing, and they
+share one renderer, so they cannot disagree about what a trace says.
+
+## At a glance
+
+```bash
+cyclops src/ --summary                  # where the time went, what threw
+cyclops src/ --tree --focus parse       # one function's subtree, as a tree
+cyclops src/ --flat                     # one line per frame, sorted by depth
+
+cyclops src/ --save-baseline            # remember this run
+# ...make a change...
+cyclops src/ --baseline out/tree.json   # what got slower
+
+cyclops src/ --watch                    # re-trace on every change
+```
+
+`--summary`, `/summary` and the plugin's default output are the same function,
+so a number in one is the number in the others.
 
 ---
 
@@ -121,6 +140,8 @@ if (result.ok) {
 }
 ```
 
+Options: `cwd`, `timeoutMs`, `maxFrames`, `env`, `input`, `keepShadows`.
+
 `trace()` never calls `process.exit`, never writes to stdout or stderr, and
 never reads `process.argv`. It returns:
 
@@ -134,6 +155,9 @@ never reads `process.argv`. It returns:
   entry,                // which file was chosen as the entry point
   sourceFiles,          // every file the trace instrumented
   instrumented,         // how many imported files were traced too
+  droppedFrames,        // frames skipped by the capture cap (0 = complete)
+  bufferOverflow,       // the trace exceeded the 512MB capture buffer
+  timedOut,             // the program was stopped at the timeout
 }
 ```
 
@@ -216,6 +240,42 @@ ctl.stop();      // detach
 
 ---
 
+## Comparing two runs
+
+The question a tracer exists for, and one a single tree cannot answer.
+
+```bash
+cyclops src/ --save-baseline        # capture the reference
+# ...edit something...
+cyclops src/ --baseline out/tree.json
+```
+
+```
+before: 7 frames, 1 root(s), depth 2, 5ms
+after:  9 frames, 1 root(s), depth 2, 8ms
+wall clock 5ms -> 8ms  +3ms +60%
+
+## slower
+  heavy       4ms -> 7ms  +3ms +75%
+
+## new calls
+  + brandNew     2 calls  <1ms self
+```
+
+The comparison is per function name, not structural: two runs of the same
+program rarely have the same shape (an extra retry, a cache hit that was a miss,
+different input), so a tree diff is mostly noise. And it is on **self** time,
+because total time is wall clock with children inside it — "f got slower"
+measured on total usually means something f called got slower.
+
+Rows are ordered by absolute change, not by percentage: a function going from
+2 ms to 9 ms matters more than one going from 2000 ms to 2010 ms.
+
+Errors that appeared or went away are reported too, and are not mixed in with
+the timing table.
+
+---
+
 ## What cyclops will not trace
 
 Being explicit, so an agent does not read a partial trace as a complete one:
@@ -231,6 +291,24 @@ Being explicit, so an agent does not read a partial trace as a complete one:
   every file. The choice is printed, never silent.
 - **A program that hangs** is cut off at 60 s, and the frames that never closed
   are reported as such — the durations are partial.
+- **Capture is capped at 250,000 frames** (change with `--max-frames`). Past
+  that the program keeps running and its output is intact, but the tail of the
+  trace is dropped — otherwise a tight loop is an out-of-memory kill that takes
+  the traced program with it. A capped trace says so at the top of every
+  summary, in the plugin's footer, and as `droppedFrames` on the raw result:
+
+  ```
+  !! 298001 frames not captured: the run hit its cap. Counts and totals
+     below cover only what was kept
+  ```
+
+  That line is the whole reason the cap is safe to have. Without it, a capped
+  trace reads as a complete observation — "noop, 1999 calls" when it was
+  actually called 300,000 times.
+- **The capture buffer is 512 MB.** A trace larger than that is reported as a
+  buffer overflow rather than lost silently, so the cause is never a mystery.
+- **JSX is compiled with the automatic runtime**, so a component file works
+  whether or not it imports React.
 
 ---
 
