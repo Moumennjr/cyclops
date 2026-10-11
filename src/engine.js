@@ -207,6 +207,12 @@ export function traceFile(entry, options = {}) {
       env,
       timeout,
       input,
+      // The default is 1 MB, and a trace is JSON: a few thousand frames crosses
+      // it. Over the limit spawnSync fails with ENOBUFS and *truncates* rather
+      // than erroring cleanly, which is the silent-wrong-answer failure mode
+      // again. 512 MB is far past any trace worth reading and still bounds the
+      // parent's memory.
+      maxBuffer: 512 * 1024 * 1024,
     });
   } catch (e) {
     if (!keepShadows) cleanup(prepared);
@@ -226,6 +232,14 @@ export function traceFile(entry, options = {}) {
 
   const { tree, userText } = splitTree(run.stderr ?? "");
 
+  // spawnSync reports an over-buffer run by truncating *and* setting `error`
+  // to ENOBUFS. Truncation alone is indistinguishable from a program that
+  // produced no trace, so the cause is named here rather than surfacing as the
+  // generic "no trace captured" -- otherwise the fix (a bigger buffer, or a
+  // program with fewer frames) is unguessable.
+  const bufferOverflow = run.error && run.error.code === "ENOBUFS";
+  const timedOut = Boolean(run.error && run.error.code === "ETIMEDOUT");
+
   return {
     ok: tree !== null,
     // The source files that were instrumented, entry first. A watcher needs
@@ -235,20 +249,29 @@ export function traceFile(entry, options = {}) {
     // pretending the program failed outright.
     error: tree
       ? null
-      : (run.stderr || "").trim().split("\n").slice(-1)[0] ||
-        "cyclops: no trace captured (no instrumented call ran)",
+      : bufferOverflow
+        ? `cyclops: the trace exceeded the ${Math.round(
+          (run.error.maxBuffer ?? 0) / 1024 / 1024,
+        )}MB capture buffer, so it was cut off rather than lost. The program ran (exit ${
+          run.status ?? "?"
+        }); re-run with a frame cap or trace a smaller entry point.`
+        : timedOut
+          ? `cyclops: the program was still running after ${Math.round(
+            timeout / 1000,
+          )}s and was stopped. A partial trace is written if one was captured.`
+          : (run.stderr || "").trim().split("\n").slice(-1)[0] ||
+            "cyclops: no trace captured (no instrumented call ran)",
     tree,
     exitCode: run.status,
     signal: run.signal ?? null,
+    bufferOverflow,
+    timedOut,
     stdout: run.stdout ?? "",
     stderr: userText,
     rawStderr: run.stderr ?? "",
     warnings: prepared.warnings,
     entry: prepared.entry,
     instrumented: prepared.instrumented,
-    timedOut: run.signal === "SIGTERM" && run.error === undefined
-      ? false
-      : Boolean(run.error && run.error.code === "ETIMEDOUT"),
   };
 }
 
