@@ -126,7 +126,13 @@ export function prepare(entry, { token = String(process.pid) } = {}) {
     const dest = target && shadowOf.get(target);
     if (dest) entryCode = rewriteSpecifier(entryCode, spec, toRelativeSpecifier(srcDir, dest));
   }
-  writeFileSync(entryShadow, runtimeSource() + "\n" + entryCode);
+  // Only the entry carries the runtime: neighbours reference __enter and friends
+  // through globalThis, which the entry installs before any traced function
+  // runs. Their dialect does not matter here.
+  writeFileSync(
+    entryShadow,
+    runtimeSource({ dialect: entryExt === "cjs" ? "cjs" : "esm" }) + "\n" + entryCode,
+  );
   files.push(entryShadow);
 
   return {

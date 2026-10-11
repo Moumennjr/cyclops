@@ -19,15 +19,24 @@ const TRACER_NAMES = [
   "__find", "__remove",
 ];
 
-export function runtimeSource({ expose = true } = {}) {
+export function runtimeSource({ expose = true, dialect = "esm" } = {}) {
   const body = buildRuntime();
 
-  if (!expose) return `"use strict";\n${body}`;
+  // writeSync has to come from somewhere, and the traced program may be ESM
+  // (no `require`) or CommonJS. The setup differs, so it is selected rather
+  // than guessed at runtime.
+  const writer =
+    dialect === "cjs"
+      ? `const __cyc_writeSync = require("node:fs").writeSync;`
+      : `import { writeSync as __cyc_writeSync } from "node:fs";`;
+
+  const head = `${writer}\n"use strict";\n${body}`;
+  if (!expose) return head;
 
   const installs = TRACER_NAMES.map(
     (name) => `globalThis[${JSON.stringify(name)}] = ${name};`,
   ).join("\n");
-  return `"use strict";\n${body}\n${installs}\n`;
+  return `${head}\n${installs}\n`;
 }
 
 function buildRuntime() {
@@ -217,13 +226,38 @@ function __remove(frame) {
   if (i !== -1) __cyc_stack.splice(i, 1);
 }
 
+// The tree is written with writeSync on fd 2, NOT process.stderr.write.
+//
+// process.stderr is a stream, and writes to it are asynchronous whenever it is
+// a pipe -- which it is, because the CLI spawns this program and reads a pipe.
+// On the "exit" event there is nothing left to wait for, so the tail of an
+// async write is simply dropped. Measured on a 300 kB payload:
+//
+//     process.stderr.write      -> 146176 bytes arrived of 307200
+//     writeSync(2, ...)         -> 307200 bytes arrived of 307200
+//
+// A trace that does not parse is a trace that does not exist: splitTree finds
+// no closing marker, the CLI reports "no trace captured", and the program's own
+// successful exit code makes it look like the program simply did nothing. That
+// is the worst possible failure for a profiler -- a silent wrong answer -- so
+// the write has to be synchronous.
+function __cyc_emit(payload) {
+  __cyc_writeSync(2, payload);
+}
+
 process.on("exit", function () {
+  const M = ${JSON.stringify(CYC_MARKER)};
   try {
-  const payload = JSON.stringify({ roots: __cyc_roots });
-    process.stderr.write(${JSON.stringify(CYC_MARKER)} + payload + ${JSON.stringify(CYC_MARKER)});
+    __cyc_emit(M + JSON.stringify({ roots: __cyc_roots }) + M);
   } catch (e) {
-    process.stderr.write(${JSON.stringify(CYC_MARKER)} + JSON.stringify({ roots: __cyc_roots, note: "partial tree" }) + ${JSON.stringify(CYC_MARKER)});
+    try {
+      __cyc_emit(M + JSON.stringify({ roots: __cyc_roots, note: "partial tree" }) + M);
+    } catch (e2) {
+      // Nothing further can be done; the trace is lost, and losing it quietly
+      // is what the try/catch above exists to prevent in every other case.
+    }
   }
 });
 `;
 }
+
