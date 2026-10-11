@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
@@ -65,6 +65,8 @@ function parseArgs(argv) {
   let serve = false;
   let watch = false;
   let format = null;      // summary | tree | flat -- print and exit
+  let baseline = null;    // a tree.json to compare this run against
+  let saveBaseline = false;
   let focus = null;
   let maxFrames = 0;
   let help = false;
@@ -75,12 +77,14 @@ function parseArgs(argv) {
     else if (a === "--no-server") noServer = true;
     else if (a === "--no-open") noOpen = true;
     else if (a === "--serve") serve = true;
+    else if (a === "--baseline") baseline = argv[++i] || null;
     else if (a === "--watch") watch = true;
     else if (a === "--print" || a === "--summary") format = format || "summary";
     else if (a === "--tree") format = "tree";
     else if (a === "--flat") format = "flat";
     else if (a === "--focus") focus = argv[++i] || null;
     else if (a === "--max-frames") maxFrames = Number(argv[++i]) || 0;
+    else if (a === "--save-baseline") saveBaseline = !argv[++i];
     else if (a === "--no-vite") continue; // deprecated no-op: the viewer ships built
     else if (a === "--help" || a === "-h") { help = true; continue; }
     else if (!a.startsWith("-")) files.push(a);
@@ -89,7 +93,7 @@ function parseArgs(argv) {
       process.exit(1);
     }
   }
-  return {files, port, noServer, noOpen, serve, watch, format, focus, maxFrames, help};
+  return {files, port, noServer, noOpen, serve, watch, format, focus, maxFrames, baseline, help, saveBaseline};
 }
 
 function printUsage() {
@@ -110,6 +114,8 @@ function printUsage() {
     --summary, --tree, --flat   print the trace as text and exit, no browser
     --focus <name>              scope the output to one function's subtree
     --max-frames <n>            stop capturing after n frames (default 250000)
+    --save-baseline             keep this run as the reference for next time
+    --baseline <tree.json>      compare this run against an earlier one
 
   --watch re-traces on every change to the program, not just the entry, and
   keeps serving; the viewer already picks the new trace up by itself.
@@ -123,8 +129,8 @@ function printUsage() {
 }
 
 async function main() {
-  const {files, port, noServer, noOpen, serve, watch, format, focus, maxFrames, help} =
-    parseArgs(process.argv.slice(2));
+  const {files, port, noServer, noOpen, serve, watch, format, focus, maxFrames,
+    baseline, help, saveBaseline} = parseArgs(process.argv.slice(2));
   if (help || !files.length) {
     printUsage();
     process.exit(help ? 0 : 1);
@@ -196,6 +202,23 @@ async function main() {
       },
     });
     console.error(`[cyclops] watching ${controller.watchedFiles().length} file(s)`);
+  }
+
+  // --baseline <tree.json> answers "did my change help?", and --save-baseline
+  // captures the run to compare against next time. Both are opt-in: saving a
+  // baseline by default would quietly overwrite the reference the next run
+  // compares to.
+  if (baseline) {
+    try {
+      const { diffTrees, renderDiff } = await import("./diff.js");
+      const previous = JSON.parse(readFileSync(baseline, "utf8"));
+      process.stdout.write(
+        renderDiff(diffTrees(previous.roots || [], result.tree.roots)) + "\n",
+      );
+    } catch (e) {
+      console.error(`[cyclops] could not compare against ${baseline}: ${e.message}`);
+    }
+    process.exit(result.exitCode ?? 0);
   }
 
   // --summary/--tree/--flat print the trace as text and stop. The same

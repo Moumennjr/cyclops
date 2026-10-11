@@ -62,7 +62,8 @@
     "./analyze": "./src/analyze.js",
     "./plugin": "./plugin/opencode.js",
     "./package.json": "./package.json",
-    "./editor": "./src/editor.js"
+    "./editor": "./src/editor.js",
+    "./diff": "./src/diff.js"
   },
   "main": "./src/index.js"
 }
