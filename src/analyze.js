@@ -62,8 +62,15 @@ export function stats(roots) {
 // propagating, while the same error on 40 unrelated frames is 40 bugs.
 export function errorReport(roots) {
   const byKey = new Map();
+
+  // Children first. The frame that *raised* an error is the deepest one that
+  // carries it, so descending before inspecting the current frame makes the
+  // first sighting the throw site. Walking top-down instead makes it the
+  // outermost caller, which is the frame that merely saw the error propagate --
+  // and that is the wrong line to send someone to.
   const walk = (frames, depth) => {
     for (const frame of frames || []) {
+      walk(frame.children, depth + 1);
       if (frame.error) {
         const key = `${frame.error.name}: ${frame.error.message}`;
         if (!byKey.has(key)) {
@@ -73,19 +80,28 @@ export function errorReport(roots) {
             frames: 0,
             deepest: 0,
             sites: new Set(),
+            // Where the error was *raised*, not where it was seen. A frame that
+            // catches or propagates records the same error, and reporting the
+            // outermost one sends the reader to a function that merely called
+            // something which threw further down.
+            origin: null,
+            originName: null,
           });
         }
         const row = byKey.get(key);
         row.frames++;
+        if (!row.origin) {
+          row.origin = frame.loc && frame.loc.file
+            ? `${frame.loc.file}:${frame.loc.line}`
+            : null;
+          row.originName = frame.name || "?";
+        }
         row.deepest = Math.max(row.deepest, depth);
         const loc = frame.loc && frame.loc.file
           ? `${frame.loc.file}:${frame.loc.line}`
           : null;
         if (loc) row.sites.add(loc);
-        walk(frame.children, depth + 1);
-        continue;
       }
-      walk(frame.children, depth + 1);
     }
   };
   walk(roots, 0);
@@ -234,9 +250,15 @@ export function summarize(roots, options = {}) {
     lines.push("## errors");
     lines.push("");
     for (const row of errors.slice(0, 5)) {
-      const site = row.sites.length ? ` at ${row.sites[0]}` : "";
+      // The throw site, which is the frame that raised it -- not the outermost
+      // frame that merely saw it propagate.
+      const where = row.origin
+        ? ` in ${row.originName}() at ${row.origin}`
+        : row.sites.length
+          ? ` at ${row.sites[row.sites.length - 1]}`
+          : "";
       lines.push(
-        `  ${row.name}: ${row.message}${site} — on ${plural(row.frames, "frame")}` +
+        `  ${row.name}: ${row.message}${where} — on ${plural(row.frames, "frame")}` +
           (row.frames > 1 ? ` (propagated up to depth ${row.deepest})` : ""),
       );
     }

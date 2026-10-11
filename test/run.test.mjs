@@ -423,6 +423,15 @@ test("summarize reports errors with how far each one propagated", () => {
   assert.equal(errors.length, 1, "one distinct error, not three");
   assert.equal(errors[0].frames, 3, "which crossed all three frames");
   assert.equal(errors[0].deepest, 2, "and reached depth 2");
+  // The origin must be the frame that *threw*, not the outermost one that only
+  // saw it propagate. boom() is line 2 here; top() is line 5.
+  assert.equal(errors[0].originName, "boom", "the throwing frame is named");
+  assert.equal(errors[0].origin, "prog.js:2", "and its line, not the caller's");
+  assert.match(
+    report,
+    /TypeError: kaboom in boom\(\) at prog\.js:2/,
+    "the summary leads with the throw site",
+  );
 });
 
 test("findFrames locates a call by name and reports its path", () => {
