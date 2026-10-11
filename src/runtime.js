@@ -55,6 +55,25 @@ const __cyc_frames = new Map();
 const __cyc_suspended = new Set();
 let __cyc_nextId = 1;
 
+// A ceiling on captured frames.
+//
+// Every instrumented call allocates a frame that is retained until the trace is
+// serialised, so a program in a tight loop is a memory problem before it is a
+// file-size problem: 20M calls of a one-argument function is tens of gigabytes
+// and an out-of-memory kill, with the trace lost *and* the program taken down
+// with it.
+//
+// Past the cap, counting continues but frames are no longer kept, so the
+// numbers in the summary stay true and the run still finishes. A trace that is
+// honestly incomplete beats a process that dies.
+const __cyc_frameCap =
+  Number(
+    typeof process !== "undefined" && process.env
+      ? process.env.CYCLOPS_MAX_FRAMES
+      : globalThis.CYCLOPS_MAX_FRAMES,
+  ) || 250000;
+let __cyc_dropped = 0;
+
 // Names that belong to the compiler, not to the traced program.
 //
 // TypeScript and decorator files go through esbuild first, and its output
@@ -71,6 +90,12 @@ const SYNTHETIC = new Set([
 ]);
 
 function __enter(name, args, loc) {
+  if (__cyc_dropped > 0) {
+    // Already over the cap: count and return a handle that resolves to nothing,
+    // so the instrumented code runs unchanged and __ret/__err are harmless.
+    __cyc_dropped++;
+    return 0;
+  }
   // A synthetic frame is still tracked for stack purposes but is never emitted,
   // so anything it calls hangs off the nearest real caller instead.
   if (typeof name === "string" && SYNTHETIC.has(name)) {
@@ -78,6 +103,11 @@ function __enter(name, args, loc) {
     return { __hidden: true, id: 0, name: name, args: [], loc: loc || null,
              children: [], return: { type: "undefined" }, error: null,
              startedAt: Date.now(), endedAt: null, parentFrame: prev || null };
+  }
+
+  if (__cyc_nextId > __cyc_frameCap) {
+    __cyc_dropped++;
+    return 0;
   }
 
   const frame = {
@@ -248,7 +278,13 @@ function __cyc_emit(payload) {
 process.on("exit", function () {
   const M = ${JSON.stringify(CYC_MARKER)};
   try {
-    __cyc_emit(M + JSON.stringify({ roots: __cyc_roots }) + M);
+    const payload = {
+      roots: __cyc_roots,
+      // Present only when the cap was hit, so a consumer can tell a complete
+      // trace from a truncated one without guessing from the frame count.
+      droppedFrames: __cyc_dropped || undefined,
+    };
+    __cyc_emit(M + JSON.stringify(payload) + M);
   } catch (e) {
     try {
       __cyc_emit(M + JSON.stringify({ roots: __cyc_roots, note: "partial tree" }) + M);

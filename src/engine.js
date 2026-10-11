@@ -181,6 +181,10 @@ export function traceFile(entry, options = {}) {
     timeout = options.timeoutMs ?? 60_000,
     keepShadows = false,
     input,
+    // A ceiling on captured frames, for a program that would otherwise never
+    // finish tracing. `keepFrames` alias kept because both names read naturally
+    // in different call sites.
+    maxFrames = 0,
   } = options;
 
   let prepared;
@@ -204,7 +208,10 @@ export function traceFile(entry, options = {}) {
     run = spawnSync(process.execPath, [prepared.shadow], {
       encoding: "utf8",
       cwd,
-      env,
+      // The child reads this to size its own frame budget; capping in the child
+      // is what actually bounds memory, because the parent's cap would only
+      // bound the file.
+      env: maxFrames ? { ...env, CYCLOPS_MAX_FRAMES: String(maxFrames) } : env,
       timeout,
       input,
       // The default is 1 MB, and a trace is JSON: a few thousand frames crosses
@@ -272,6 +279,9 @@ export function traceFile(entry, options = {}) {
     warnings: prepared.warnings,
     entry: prepared.entry,
     instrumented: prepared.instrumented,
+    // How many frames the run declined to keep because it hit the cap. Zero or
+    // undefined means the trace is complete.
+    droppedFrames: (tree && tree.droppedFrames) || 0,
   };
 }
 
