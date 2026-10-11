@@ -23,6 +23,20 @@ import { transformSync } from "esbuild";
 import { parse } from "@babel/parser";
 import { needsTypeStripping, isTypeScript, extOf } from "./plugins.js";
 
+// JSX is lowered with the *automatic* runtime, not the classic one.
+//
+// The classic lowering emits `React.createElement(...)`, which requires a
+// `React` binding in scope. Since React 17 the runtime has not required that,
+// and a file using the modern transform has no React import at all -- so
+// instrumenting one produced a trace that died with:
+//
+//     ReferenceError: React is not defined
+//
+// The automatic runtime imports `jsx` from react/jsx-runtime instead, matching
+// what a current build does, so a component file traces the same way it runs.
+// Files using the classic transform still work: they have React imported
+// already, and the automatic runtime is a superset.
+//
 // esbuild loader per extension. `ts` also accepts .js/.mjs/.cjs input, which
 // keeps the mapping total even for an unexpected extension.
 function loaderFor(filename) {
@@ -174,11 +188,13 @@ export function stripTypes(source, filename) {
 
   const result = transformSync(source, {
     loader: loaderFor(filename),
+    jsx: "automatic",
     tsconfigRaw: {
       compilerOptions: {
         experimentalDecorators: true,
         useDefineForClassFields: false,
         verbatimModuleSyntax: false,
+        jsx: "react-jsx",
       },
     },
   });

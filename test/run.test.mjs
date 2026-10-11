@@ -732,6 +732,47 @@ test("ordinary method calls are not mistaken for schedulers", () => {
   );
 });
 
+test("JSX lowers with the automatic runtime, so React need not be in scope", () => {
+  // The classic lowering emits React.createElement(...), which needs a `React`
+  // binding. Since React 17 it does not, so a component file using the modern
+  // transform has no React import -- and instrumenting one produced a trace
+  // that died with "ReferenceError: React is not defined".
+  //
+  // The test stubs react/jsx-runtime because the program is run for real, not
+  // parsed.
+  const root = mkdtempSync(join(tmpdir(), "cyc-jsx-"));
+  mkdirSync(join(root, "node_modules", "react"), { recursive: true });
+  writeFileSync(join(root, "package.json"), '{ "type": "module" }');
+  writeFileSync(join(root, "node_modules", "react", "package.json"),
+    '{ "name": "react", "exports": { "./jsx-runtime": "./jsx-runtime.js" } }');
+  writeFileSync(join(root, "node_modules", "react", "jsx-runtime.js"),
+    'export function jsx(t, p) { return { type: t, props: p }; }\n' +
+    'export function jsxs(t, p) { return { type: t, props: p }; }\n' +
+    'export const Fragment = "fragment";\n');
+
+  writeFileSync(join(root, "App.tsx"), [
+    "interface Props { name: string }",
+    "function Greeting(props: Props) {",
+    '  return <div id="greet">hello {props.name}</div>;',
+    "}",
+    "function App() {",
+    '  return <Greeting name="ada" />;',
+    "}",
+    "console.log(JSON.stringify(App()));",
+  ].join("\n"));
+
+  const result = trace("App.tsx", { cwd: root });
+  assert.equal(result.ok, true,
+    `JSX traced without React in scope (${result.error})`);
+  assert.equal(result.exitCode, 0, result.stderr.slice(0, 300));
+  assert.match(result.stdout, /"name":"ada"/, "the component really rendered");
+
+  const app = findFrame(result.tree.roots, "App");
+  assert.ok(app, "the component function is a frame");
+  assert.equal(app.error, null);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("decorators parse, run and are traced", () => {
   const src = `
     function logged(target, key, desc) {
