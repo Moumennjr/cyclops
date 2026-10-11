@@ -132,7 +132,11 @@ export async function startServer({ port = 4600, treePath, distDir = DEFAULT_DIS
 
       const body =
         pathname === "/summary"
-          ? summarize(roots, { focus, title: treePath })
+          ? summarize(roots, {
+            focus,
+            title: treePath,
+            droppedFrames: tree.droppedFrames || 0,
+          })
           : pathname === "/tree"
             ? renderTree(roots, {
               maxDepth: Number(params.get("maxDepth") || 12),

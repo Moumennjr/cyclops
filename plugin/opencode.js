@@ -222,6 +222,8 @@ const TraceTool = defineTool({
       body = summarize(tree.roots, {
         focus,
         title: relative(dir, result.entry) || result.entry,
+        // A capped trace must never read as a complete observation.
+        droppedFrames: result.droppedFrames || tree.droppedFrames || 0,
       });
     }
 
@@ -255,6 +257,11 @@ const TraceTool = defineTool({
     }
     if (result.exitCode !== null && result.exitCode !== 0) {
       trailer.push(`program exited with code ${result.exitCode}`);
+    }
+    if (result.droppedFrames > 0) {
+      trailer.push(
+        `${result.droppedFrames} frame(s) hit the capture cap and were not recorded`,
+      );
     }
     for (const w of result.warnings ?? []) {
       trailer.push(`skipped ${w.reason} "${w.name}" at ${w.file}:${w.line}`);

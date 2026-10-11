@@ -233,7 +233,11 @@ async function main() {
         ? renderTree(roots, { maxDepth: 20, timing: true })
         : format === "flat"
           ? renderFlat(roots, { timing: true })
-          : summarize(roots, { focus, title: result.entry }) + "\n",
+          : summarize(roots, {
+              focus,
+              title: result.entry,
+              droppedFrames: result.droppedFrames,
+            }) + "\n",
     );
     process.exit(result.exitCode ?? 0);
   }

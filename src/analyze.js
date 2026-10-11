@@ -189,7 +189,13 @@ function bar(share, width = 20) {
  * about the app".
  */
 export function summarize(roots, options = {}) {
-  const { focus = null, maxRows = 8, title = null } = options;
+  const {
+    focus = null, maxRows = 8, title = null,
+    // How many frames the run declined to keep, from a capped trace. A summary
+    // that does not mention this reads as a complete picture of a run that was
+    // not fully observed -- which is the failure mode a cap introduces.
+    droppedFrames = 0,
+  } = options;
 
   let subject = roots;
   let focusNote = "";
@@ -212,6 +218,13 @@ export function summarize(roots, options = {}) {
     `${plural(s.frames, "frame")} · ${plural(s.roots, "root")} · depth ${s.maxDepth}` +
       (s.spanMs !== null ? ` · wall clock ${ms(s.spanMs)}` : ""),
   );
+  if (droppedFrames > 0) {
+    lines.push(
+      `!! ${plural(droppedFrames, "frame")} not captured: the run hit its cap. ` +
+        `Counts and totals below cover only what was kept; re-run with a higher ` +
+        `--max-frames for a complete picture.`,
+    );
+  }
   if (focusNote) lines.push(focusNote);
   lines.push("");
 
