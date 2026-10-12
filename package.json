@@ -65,7 +65,8 @@
     "./editor": "./src/editor.js",
     "./diff": "./src/diff.js",
     "./scan": "./src/scan.js",
-    "./map": "./src/map.js"
+    "./map": "./src/map.js",
+    "./maplayout": "./src/maplayout.js"
   },
   "main": "./src/index.js"
 }
