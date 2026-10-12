@@ -6,6 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { renderTree, renderFlat, aggregate } from "./render.js";
 import { flattenForEditor } from "./editor.js";
 import { summarize, findFrames, stats, errorReport } from "./analyze.js";
+import { renderMap, renderMapFlat } from "./maplayout.js";
+import { renderMapReport } from "./mapanalyze.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DIST = join(here, "..", "dist");
@@ -86,8 +88,14 @@ function listen(server, port) {
 
 // Starts (or reuses) the viewer + trace server. Reuses an existing instance
 // serving the same tree, otherwise takes the first free port from `port`.
-export async function startServer({ port = 4600, treePath, distDir = DEFAULT_DIST } = {}) {
+export async function startServer({
+  port = 4600, treePath, distDir = DEFAULT_DIST, mapPath = null,
+} = {}) {
   const treeFile = treePath || resolve(process.cwd(), "out", "tree.json");
+  // The map is optional. A trace server with no map answers 404 rather than
+  // guessing, so the viewer can tell "no map yet" from "no trace yet" -- two
+  // very different states for a page that shows both.
+  const mapFile = mapPath || resolve(process.cwd(), "out", "map.json");
   const indexFile = join(distDir, "index.html");
 
   const server = createServer((req, res) => {
@@ -99,6 +107,17 @@ export async function startServer({ port = 4600, treePath, distDir = DEFAULT_DIS
         res,
         tree ? 200 : 404,
         tree ? JSON.stringify(tree) : JSON.stringify({ error: "no trace yet" }),
+        { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      );
+    }
+
+    // The static project map: what the codebase looks like, without running it.
+    if (pathname === "/map.json") {
+      const map = readTree(mapFile);
+      return send(
+        res,
+        map ? 200 : 404,
+        map ? JSON.stringify(map) : JSON.stringify({ error: "no map yet" }),
         { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
       );
     }
@@ -180,11 +199,41 @@ export async function startServer({ port = 4600, treePath, distDir = DEFAULT_DIS
       });
     }
 
+    // Text views of the map, mirroring the tree's /summary and /tree.
+    if (pathname === "/map.txt" || pathname === "/map.report" ||
+        pathname === "/map.edges") {
+      const map = readTree(mapFile);
+      if (!map) {
+        return send(res, 404, "no map yet; run: cyclops map .", {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "no-store",
+        });
+      }
+      const params = new URL(req.url, "http://localhost").searchParams;
+      const focus = params.get("focus");
+      const body =
+        pathname === "/map.txt"
+          ? renderMap(map)
+          : pathname === "/map.edges"
+            ? renderMapFlat(map)
+            : renderMapReport(map, { title: focus ? `focus: ${focus}` : null });
+      return send(res, 200, body, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      });
+    }
+
     if (pathname === "/whoami") {
       return send(
         res,
         200,
-        JSON.stringify({ treePath: treeFile, port: server.address()?.port ?? null }),
+        JSON.stringify({
+          treePath: treeFile,
+          // Absent rather than a path that does not exist: the viewer's mode
+          // switch needs to tell "no map yet" from "map at some path".
+          mapPath: existsSync(mapFile) ? mapFile : null,
+          port: server.address()?.port ?? null,
+        }),
         { "content-type": "application/json; charset=utf-8" },
       );
     }
