@@ -66,7 +66,8 @@
     "./diff": "./src/diff.js",
     "./scan": "./src/scan.js",
     "./map": "./src/map.js",
-    "./maplayout": "./src/maplayout.js"
+    "./maplayout": "./src/maplayout.js",
+    "./mapanalyze": "./src/mapanalyze.js"
   },
   "main": "./src/index.js"
 }

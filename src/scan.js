@@ -145,6 +145,17 @@ export function scanFile(path, source) {
         reexports.push({ spec, everything: true });
         break;
       }
+      case "FunctionDeclaration":
+      case "ClassDeclaration":
+      case "VariableDeclaration": {
+        // A plain top-level declaration, not an export. Omitting this made
+        // every un-exported function invisible: scanFile('errors.js') on a file
+        // whose entire content is two plain functions returned zero of them.
+        // It never showed up as an error, because the parse really did succeed
+        // -- the nodes were simply never visited.
+        recordDeclaration(stmt, false);
+        break;
+      }
       case "ExpressionStatement": {
         // require("./x") at the top level, as CommonJS modules use
         const expr = stmt.expression;
