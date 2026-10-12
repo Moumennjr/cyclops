@@ -39,7 +39,7 @@ import { snapshot } from "../src/snapshot.js";
 import { watchTrace } from "../src/watch.js";
 import { trace } from "../src/engine.js";
 import { buildMap } from "../src/map.js";
-import { layoutMap, renderMap, renderMapFlat } from "../src/maplayout.js";
+import { layoutMap, mapBounds } from "../src/maplayout.js";
 import { analyzeMap, renderMapReport, findCycles } from "../src/mapanalyze.js";
 import { scanFile } from "../src/scan.js";
 import { harnessFor, callersInMap } from "../src/harness.js";
@@ -745,6 +745,209 @@ test("ordinary method calls are not mistaken for schedulers", () => {
     2,
     "only the two real calls of use() are frames",
   );
+});
+
+test("the scanner sees plain functions, not just exported ones", () => {
+  // The bug this covers cost a day of confusion: recordDeclaration was called
+  // only from the export branches, so every un-exported top-level function was
+  // invisible. It never reported an error, because the parse really had
+  // succeeded -- the nodes were simply never visited.
+  const root = mkdtempSync(join(tmpdir(), "cyc-scan-"));
+  writeFileSync(join(root, "plain.js"), [
+    "function inner() { return 1; }",
+    "function outer() { return inner(); }",
+    "outer();",
+  ].join("\n"));
+
+  const scan = scanFile(join(root, "plain.js"));
+  assert.equal(scan.error, null);
+  assert.deepEqual(
+    scan.functions.map((f) => f.name).sort(),
+    ["inner", "outer"],
+    "both plain functions are found",
+  );
+  assert.equal(scan.functions.filter((f) => f.exported).length, 0,
+    "and neither is wrongly reported as exported");
+
+  const targets = scan.calls.filter((c) => c.to === "inner");
+  assert.equal(targets.length, 1, "the call between them is seen");
+  assert.equal(targets[0].from, "outer", "and attributed to the caller");
+});
+
+test("the scanner reads classes, methods and parameter defaults", () => {
+  const root = mkdtempSync(join(tmpdir(), "cyc-scan2-"));
+  writeFileSync(join(root, "kinds.js"), [
+    "export class Widget {",
+    "  #v = 1;",
+    "  static make() { return new Widget(); }",
+    "  render() { return this.#v; }",
+    "}",
+    "const scaled = (n, factor = 2, extra) => n * factor;",
+  ].join("\n"));
+
+  const scan = scanFile(join(root, "kinds.js"));
+  const names = scan.functions.map((f) => f.name);
+  assert.ok(names.includes("Widget"), "the class");
+  assert.ok(names.includes("Widget.make"), "a static method");
+  assert.ok(names.includes("Widget.render"), "an instance method");
+  assert.ok(names.includes("scaled"), "an arrow function");
+
+  const scaled = scan.functions.find((f) => f.name === "scaled");
+  assert.deepEqual(
+    scaled.paramsList.map((p) => p.name),
+    ["n", "factor", "extra"],
+    "parameter names are recorded, for the harness",
+  );
+  assert.equal(scaled.paramsList[1].defaultValue, "2",
+    "a literal default is kept as source");
+  assert.equal(scaled.paramsList[0].defaultValue, null);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("the map resolves calls across files and marks what it cannot prove", () => {
+  const root = mkdtempSync(join(tmpdir(), "cyc-map-"));
+  writeFileSync(join(root, "helper.js"),
+    "export function shared(x) { return x; }\n");
+  writeFileSync(join(root, "app.js"), [
+    'import { shared } from "./helper.js";',
+    "function local() { return 1; }",
+    "function run() { return local() + shared(2) + String(3); }",
+    "run();",
+  ].join("\n"));
+
+  const map = buildMap(root, { cwd: root });
+  assert.equal(map.error, null);
+
+  const shared = map.nodes.find((n) => n.label === "shared");
+  const run = map.nodes.find((n) => n.label === "run");
+  const local = map.nodes.find((n) => n.label === "local");
+  assert.ok(shared && run && local, "all three are nodes");
+
+  const edge = (from, to, relation) =>
+    map.edges.find((e) => e.source === from.id && e.target === to.id && e.relation === relation);
+
+  const crossFile = edge(run, shared, "calls");
+  assert.ok(crossFile, "a call across a module boundary is an edge");
+  assert.equal(crossFile.confidence, "EXTRACTED",
+    "resolved through an import binding, so proven rather than guessed");
+
+  assert.ok(edge(run, local, "calls"), "a local call too");
+  assert.ok(edge(run, shared, "calls-module") === undefined,
+    "and not double-counted as a module-level call");
+
+  // String is a builtin: a node for every global in the language sitting next
+  // to the project's own functions would make the structure illegible.
+  assert.ok(!map.nodes.some((n) => n.label === "String"),
+    "builtins are not nodes");
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("the map lays out every node without collisions", () => {
+  // The layout bug this covers was 52 of 98 nodes on top of each other, from
+  // a `siblings` list that excluded the node being placed -- so findIndex
+  // returned -1 for everything and every function stacked at the same y.
+  const map = layoutMap(buildMap("src"));
+  assert.ok(map.nodes.length > 50, "a real map to check");
+
+  const seen = new Map();
+  const collisions = [];
+  for (const n of map.nodes) {
+    const key = `${n.position.x},${n.position.y}`;
+    if (seen.has(key)) collisions.push(`${seen.get(key)} vs ${n.label}`);
+    seen.set(key, n.label);
+  }
+  assert.deepEqual(collisions, [], "no two nodes share a position");
+  for (const n of map.nodes) {
+    assert.equal(Number.isFinite(n.position.x), true, `${n.label} has an x`);
+    assert.equal(Number.isFinite(n.position.y), true, `${n.label} has a y`);
+  }
+
+  const bounds = mapBounds(map.nodes);
+  assert.ok(bounds.width > 0 && bounds.height > 0, "the picture has a size");
+});
+
+test("map analysis separates load-bearing code from the rest", () => {
+  const map = buildMap("src");
+  const a = analyzeMap(map);
+
+  assert.ok(a.central.length, "something is load-bearing");
+  assert.ok(a.central[0].score >= a.central[a.central.length - 1].score,
+    "ranked by score");
+
+  // The caveat is the feature. Reporting a function with no static caller as
+  // dead code is the easiest way for a map to get someone to delete working
+  // code, so the report says so explicitly.
+  const report = renderMapReport(map);
+  assert.match(report, /NOT necessarily dead/, "the report warns about it");
+  assert.match(report, /export for another package/, "and says why");
+  assert.match(report, /every skipped file is code this map has no opinion about/,
+    "and says that skipped files are ones it has no opinion about");
+
+  assert.ok(findCycles(map.nodes, map.edges).length >= 0, "cycles are computed");
+});
+
+test("trace-fn generates a runnable harness and says how much to trust it", () => {
+  const root = mkdtempSync(join(tmpdir(), "cyc-fn-"));
+  const lib = join(root, "lib.js");
+  writeFileSync(lib, [
+    "export function add(a, b) { return a + b; }",
+    "export function scale(n, factor = 2) { return n * factor; }",
+  ].join("\n"));
+
+  // Caller-supplied arguments are the best input available.
+  const withArgs = harnessFor(lib, "add", { args: [3, 4] });
+  assert.equal(withArgs.confidence, "caller");
+  assert.match(withArgs.source, /import \{ add \} from/,
+    "the harness imports the function rather than assuming a local binding");
+
+  // Guessed arguments are labelled, and the label names each guess.
+  const guessed = harnessFor(lib, "add");
+  assert.equal(guessed.confidence, "guess");
+  assert.equal(guessed.notes.length, 2, "one note per guessed parameter");
+
+  // A declared default is used rather than invented.
+  const withDefault = harnessFor(lib, "scale");
+  // The default is emitted as source text, not re-stringified -- passing it
+  // through the same path as a guessed value turned `2` into `"2"`.
+  assert.match(withDefault.source, /\(scale\)\(1, 2\)/,
+    "factor uses its declared default of 2, as a number");
+  assert.doesNotMatch(withDefault.source, /\(scale\)\([^)]*"2"/,
+    "and not as a string");
+  assert.ok(
+    withDefault.notes.some((n) => /declared default for factor/.test(n)),
+    "the reuse of the default is reported",
+  );
+
+  // A function that is not there says so, and says what is.
+  const missing = harnessFor(lib, "nope");
+  assert.match(missing.error, /not in/);
+  assert.match(missing.error, /It has:/, "and lists what is actually there");
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("trace-fn runs the function it was asked to trace", () => {
+  const root = mkdtempSync(join(tmpdir(), "cyc-fn2-"));
+  const lib = join(root, "lib.js");
+  writeFileSync(lib, "export function add(a, b) { return a + b; }\n");
+
+  const harness = harnessFor(lib, "add", { args: [3, 4] });
+  const prog = join(root, "prog.mjs");
+  writeFileSync(prog, harness.source);
+
+  const result = trace("prog.mjs", { cwd: root });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /returned: 7/, "the real arguments produced a real result");
+
+  let names = [];
+  (function walk(list) {
+    for (const f of list || []) { names.push(f.name); walk(f.children); }
+  })(result.tree.roots);
+  assert.ok(names.includes("add"), "and the call is in the trace");
+
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("a large trace survives the pipe instead of being truncated away", () => {

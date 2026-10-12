@@ -19,6 +19,7 @@
 
 import { readFileSync } from "node:fs";
 import { parse } from "@babel/parser";
+import * as t from "@babel/types";
 import { parserPluginsFor, extOf } from "./plugins.js";
 import { resolveLocal } from "./graph.js";
 

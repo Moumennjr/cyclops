@@ -120,17 +120,24 @@ export function harnessFor(file, functionName, options = {}) {
   // Recover a signature so the placeholders are shaped like real parameters.
   const params = parameterNames(file, localName, target);
   const notes = [];
-  const values = params.map((p) => {
+  // Already-source values and synthesised values need different treatment:
+  // a default is already text, a placeholder is a value.
+  const sourceArgs = params.map((p) => {
     if (p.defaultValue) {
       notes.push(`used the declared default for ${p.name}`);
+      // The default is stored as *source text*, so it goes into the generated
+      // program verbatim. Passing it through literal() would turn `2` into
+      // `"2"` -- a string where the real default was a number.
       return p.defaultValue;
     }
     notes.push(`guessed a value for ${p.name} from its name`);
-    return placeholderFor(p.name);
+    return { guessed: placeholderFor(p.name) };
   });
+  const argText = sourceArgs.map((a) =>
+    typeof a === "string" ? a : literal(a.guessed));
 
   return {
-    confidence: values.length ? "guess" : "default",
+    confidence: sourceArgs.some((a) => typeof a !== "string") ? "guess" : "default",
     functionName: localName,
     kind: target.kind,
     notes,
@@ -140,8 +147,8 @@ export function harnessFor(file, functionName, options = {}) {
       prelude +
       (isMethod
         ? `const __self = ${target.owner ? instantiate(target.owner) : "{}"};\n` +
-          `const __result = __self.${localName}(${values.map(literal).join(", ")});\n`
-        : `const __result = (${localName})(${values.map(literal).join(", ")});\n`) +
+          `const __result = __self.${localName}(${argText.join(", ")});\n`
+        : `const __result = (${localName})(${argText.join(", ")});\n`) +
       `console.log("returned:", __result);\n`,
   };
 }
