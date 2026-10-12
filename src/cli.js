@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { traceToFile } from "./engine.js";
@@ -55,6 +55,71 @@ function waitForSignal() {
     process.once("SIGTERM", () => done(143));
     process.once("SIGHUP", () => done(129));
   });
+}
+
+// `cyclops map <target>` is a subcommand rather than a flag, because it is a
+// different question ("what is this codebase") rather than a different
+// formatting of the same one ("what happened when I ran it"). A flag would
+// force the map flags to share a namespace with the trace flags and both sets
+// would grow.
+function isMapCommand(argv) {
+  return argv[0] === "map" || argv[0] === "--map";
+}
+
+function parseMapArgs(argv) {
+  const rest = argv[0] === "map" || argv[0] === "--map" ? argv.slice(1) : argv;
+  const files = [];
+  let format = "report";
+  let open = false;
+  let noServer = false;
+  let port = null;
+  let includeTests = false;
+  let includeExternal = false;
+  let outFile = null;
+  let maxFiles = 500;
+  let help = false;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === "--report") format = "report";
+    else if (a === "--map" || a === "--flat") format = "map";
+    else if (a === "--edges") format = "edges";
+    else if (a === "--open") open = true;
+    else if (a === "--no-server") noServer = true;
+    else if (a === "--tests") includeTests = true;
+    else if (a === "--external") includeExternal = true;
+    else if (a === "--max-files") maxFiles = Number(rest[++i]) || 500;
+    else if (a === "--out") outFile = rest[++i] || null;
+    else if (a === "--port") port = Number(rest[++i]) || null;
+    else if (a === "--help" || a === "-h") help = true;
+    else if (!a.startsWith("-")) files.push(a);
+    else {
+      console.error(`unknown map argument: ${a}`);
+      process.exit(1);
+    }
+  }
+  return {
+    files, format, open, noServer, port,
+    includeTests, includeExternal, outFile, maxFiles, help,
+  };
+}
+
+function printMapUsage() {
+  console.log(`usage: cyclops map <dir|file|glob> [options]
+
+  reads a project statically -- without running it -- and draws its structure:
+  modules, the functions in them, what imports what, and what calls what.
+
+  output:
+    --report          the analysis (default): load-bearing code, blast radius,
+                      import cycles, functions with no caller
+    --map             the whole map as indented text
+    --edges           one line per edge, greppable
+    --open            open the drawn map in the browser
+    --out <file>      write the map JSON here (default out/map.json)
+    --tests           include test files (excluded by default)
+    --external        draw external packages as nodes too
+    --max-files <n>   stop scanning after n files (default 500)
+    --port N          viewer port (default 4600)`);
 }
 
 function parseArgs(argv) {
@@ -129,8 +194,15 @@ function printUsage() {
 }
 
 async function main() {
+  const argv = process.argv.slice(2);
+
+  // The map is a subcommand and runs no program at all, so it returns before
+  // any of the trace machinery is touched -- no spawn, no instrumentation, no
+  // exit-code semantics to inherit.
+  if (isMapCommand(argv)) return mapMain(argv);
+
   const {files, port, noServer, noOpen, serve, watch, format, focus, maxFrames,
-    baseline, help, saveBaseline} = parseArgs(process.argv.slice(2));
+    baseline, help, saveBaseline} = parseArgs(argv);
   if (help || !files.length) {
     printUsage();
     process.exit(help ? 0 : 1);
@@ -266,6 +338,78 @@ async function main() {
     await close();
   }
   process.exit(exitCode);
+}
+
+// The static half of v2: read a project, write its map, optionally draw it.
+async function mapMain(argv) {
+  const opts = parseMapArgs(argv);
+  if (opts.help || !opts.files.length) {
+    printMapUsage();
+    return;
+  }
+
+  const cwd = process.cwd();
+  const target = opts.files[0];
+
+  const { buildMap } = await import("./map.js");
+  const { layoutMap } = await import("./maplayout.js");
+  const { renderMapReport } = await import("./mapanalyze.js");
+  const { renderMap, renderMapFlat } = await import("./maplayout.js");
+
+  let map = buildMap(target, {
+    cwd,
+    maxFiles: opts.maxFiles,
+    includeTests: opts.includeTests,
+    includeExternal: opts.includeExternal,
+  });
+  if (map.error) {
+    console.error(map.error);
+    process.exit(1);
+  }
+
+  map = layoutMap(map);
+
+  const outFile = opts.outFile ? resolve(cwd, opts.outFile) : join(cwd, "out", "map.json");
+  mkdirSync(dirname(outFile), { recursive: true });
+  writeFileSync(outFile, JSON.stringify(map, null, 2));
+
+  if (opts.format === "edges") {
+    process.stdout.write(renderMapFlat(map) + "\n");
+  } else if (opts.format === "map") {
+    process.stdout.write(renderMap(map) + "\n");
+  } else {
+    process.stdout.write(renderMapReport(map, { title: target }) + "\n");
+  }
+
+  console.error(`[cyclops] map written to ${outFile}`);
+
+  if (opts.skipped && map.skipped.length) {
+    console.error(
+      `[cyclops] ${map.skipped.length} file(s) could not be parsed and are absent from the map`,
+    );
+  }
+  if (map.truncated && map.truncationReason) {
+    console.error(`[cyclops] ${map.truncationReason}`);
+  }
+
+  if (opts.open && !opts.noServer) {
+    ensureBuild();
+    const { url, server, close } = await startServer({
+      port: opts.port ?? DEFAULT_PORT,
+      treePath: outFile,
+      mapPath: outFile,
+    });
+    console.error(`[cyclops] view the map at ${url}`);
+    if (!server) return;
+    await waitForSignal();
+    await close();
+    return;
+  }
+  // --open without a server means "print the URL and let the CLI die", which is
+  // never what anyone wants; say so rather than silently ignoring the flag.
+  if (opts.open) {
+    console.error("[cyclops] --open needs the server; dropping --no-server");
+  }
 }
 
 main().catch((e) => {
