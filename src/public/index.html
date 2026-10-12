@@ -362,6 +362,255 @@
         }
       }
 
+
+      /* ---------- map mode ----------
+         Reuses the trace's tokens (same page, one design system) and adds only
+         what the map actually needs: a module/function distinction and an edge
+         encoding for confidence. */
+
+      #root .map-node {
+        position: relative;
+        font-size: 12px;
+        line-height: 1.35;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid #cbd5e1;
+        background: #fff;
+        color: #1e293b;
+        overflow: hidden;
+      }
+      /* A module is a structural claim about the project; a function is a
+         detail inside one. Different weight, not just different colour, so the
+         distinction survives a greyscale print and a colour-blind reader. */
+      #root .map-node.map-mod {
+        background: #f8fafc;
+        border-color: #94a3b8;
+        border-left: 4px solid #334155;
+      }
+      #root .map-node.map-fn {
+        background: #fff;
+        border-left: 2px solid #cbd5e1;
+      }
+      #root .map-node.map-ext {
+        background: #fffbeb;
+        border-color: #fcd34d;
+        border-style: dashed;
+        color: #78350f;
+      }
+      #root .map-node.map-entry {
+        border-left-color: #2563eb;
+        box-shadow: 0 2px 8px rgb(37 99 235 / 0.12);
+      }
+      #root .map-node.map-sel {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 3px rgb(37 99 235 / 0.24);
+      }
+      #root .map-nm {
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #root .map-mod .map-nm {
+        font-weight: 700;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12.5px;
+      }
+      #root .map-sub {
+        margin-top: 2px;
+        font-size: 10.5px;
+        color: #64748b;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #root .map-badge {
+        display: inline-block;
+        margin-right: 4px;
+        padding: 0 4px;
+        border-radius: 3px;
+        font-size: 9.5px;
+        font-weight: 700;
+        vertical-align: 1px;
+        background: #e2e8f0;
+        color: #334155;
+      }
+      #root .map-badge.b-async { background: #ede9fe; color: #5b21b6; }
+      #root .map-badge.b-export { background: #dbeafe; color: #1e40af; }
+      #root .map-badge.b-guess { background: #fef3c7; color: #92400e; }
+
+      /* Confidence, made visible: a proven edge is solid, an inferred one
+         dashed, an unresolved one dotted. The whole reason confidence is
+         carried this far. */
+      #root .map-edge-proven .react-flow__edge-path { stroke: #94a3b8; stroke-width: 1.4; }
+      #root .map-edge-guess-inferred .react-flow__edge-path {
+        stroke: #f59e0b; stroke-width: 1.2; stroke-dasharray: 5 4;
+      }
+      #root .map-edge-guess-ambiguous .react-flow__edge-path {
+        stroke: #ef4444; stroke-width: 1.2; stroke-dasharray: 2 4;
+      }
+      #root .map-edge-contains .react-flow__edge-path {
+        stroke: #cbd5e1; stroke-width: 0.9; stroke-dasharray: 1 4;
+      }
+
+      /* ---------- mode switch ---------- */
+      .cyc-modes {
+        display: inline-flex;
+        gap: 2px;
+        margin-left: 14px;
+        padding: 2px;
+        border-radius: 7px;
+        background: #f1f5f9;
+        border: 1px solid #e2e8f0;
+      }
+      .cyc-modes button {
+        border: 0;
+        background: transparent;
+        border-radius: 5px;
+        padding: 3px 11px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: #475569;
+        cursor: pointer;
+      }
+      .cyc-modes button[aria-pressed="true"] {
+        background: #fff;
+        color: #0f172a;
+        box-shadow: 0 1px 2px rgb(15 23 42 / 0.12);
+      }
+      .cyc-modes button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+      .cyc-mapbar {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 12px;
+        border-radius: 9px;
+        background: rgb(255 255 255 / 0.94);
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 14px rgb(15 23 42 / 0.1);
+        font-size: 12px;
+        color: #334155;
+        backdrop-filter: blur(3px);
+      }
+      .cyc-mapbar label { display: inline-flex; align-items: center; gap: 4px; }
+      .cyc-mapstat { color: #64748b; font-variant-numeric: tabular-nums; }
+      .cyc-mapwarn {
+        color: #92400e;
+        background: #fef3c7;
+        border-radius: 5px;
+        padding: 1px 7px;
+        font-weight: 600;
+      }
+
+
+      /* ---------- map panel bits ---------- */
+      #root .cyc-mapmeta {
+        margin: 2px 0 10px;
+        font-size: 11px;
+        color: #64748b;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #root .cyc-maprow { display: flex; gap: 8px; margin-bottom: 7px; }
+      #root .cyc-maprow-k {
+        flex: 0 0 68px;
+        font-size: 10.5px;
+        color: #94a3b8;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        padding-top: 3px;
+      }
+      #root .cyc-maprow-v { display: flex; flex-wrap: wrap; gap: 3px; }
+      #root .cyc-mapchip {
+        border: 1px solid #e2e8f0;
+        background: #f8fafc;
+        border-radius: 4px;
+        padding: 1px 6px;
+        font: inherit;
+        font-size: 11px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #334155;
+        cursor: pointer;
+      }
+      #root .cyc-mapchip:hover { background: #e0e7ff; border-color: #c7d2fe; }
+      #root .cyc-maptrace, #root .cyc-mapfocus {
+        display: block;
+        width: 100%;
+        margin-bottom: 8px;
+        border: 1px solid #bfdbfe;
+        background: #eff6ff;
+        border-radius: 6px;
+        padding: 5px 8px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: #1e40af;
+        cursor: pointer;
+      }
+      #root .cyc-mapfocus { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
+      #root .cyc-maptrace:hover, #root .cyc-mapfocus:hover { filter: brightness(0.97); }
+
+      #root .cyc-maplab {
+        position: absolute;
+        font-size: 10px;
+        font-weight: 700;
+        color: #b45309;
+        background: #fffbeb;
+        border: 1px solid #fcd34d;
+        border-radius: 3px;
+        padding: 0 3px;
+        pointer-events: none;
+      }
+      #root .cyc-mapnotice {
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 20;
+        max-width: 560px;
+        padding: 7px 14px;
+        border-radius: 8px;
+        background: #fffbeb;
+        border: 1px solid #fcd34d;
+        color: #92400e;
+        font-size: 12px;
+        box-shadow: 0 4px 14px rgb(15 23 42 / 0.1);
+      }
+      #root .cyc-mapempty {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        color: #1e293b;
+      }
+      #root .cyc-mapempty code {
+        background: #f1f5f9;
+        padding: 2px 7px;
+        border-radius: 5px;
+        color: #0369a1;
+      }
+      #root .cyc-mapstatus { color: #94a3b8; font-size: 12px; }
+      #root .cyc-mapempty button {
+        margin-top: 10px;
+        border: 1px solid #cbd5e1;
+        background: #fff;
+        border-radius: 6px;
+        padding: 5px 14px;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #root .cyc-mapempty button:hover { background: #f8fafc; }
+
       /* ---------- edge value labels ---------- */
       .cyc-lab {
         position: absolute;
@@ -624,6 +873,10 @@
   <body>
     <header>
       <h1>Cyclops</h1>
+      <nav class="cyc-modes" aria-label="view">
+        <button id="cyc-mode-trace" aria-pressed="true">Trace</button>
+        <button id="cyc-mode-map" aria-pressed="false">Map</button>
+      </nav>
       <div class="legend" aria-hidden="true">
         <span class="lg"><i class="sw"></i>call</span>
         <span class="lg"><i class="sw sw-ret"></i>return</span>
@@ -635,5 +888,6 @@
     </header>
     <div id="root"></div>
     <script type="module" src="/main.jsx"></script>
+    <script type="module" src="/mode.jsx"></script>
   </body>
 </html>

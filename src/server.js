@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createServer } from "node:http";
-import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { renderTree, renderFlat, aggregate } from "./render.js";
@@ -58,11 +58,33 @@ function send(res, status, body, headers = {}) {
 
 function sendFile(res, file, cacheControl) {
   if (!existsSync(file)) return send(res, 404, "not found");
+
+  // A directory (e.g. a request for "/assets/") makes createReadStream emit
+  // EISDIR, and piping that with no error listener takes the whole server down
+  // with an unhandled 'error' event. This check has to come *before* writeHead:
+  // sending 404 afterwards would mean writing headers twice.
+  try {
+    if (statSync(file).isDirectory()) return send(res, 404, "not found");
+  } catch {
+    return send(res, 404, "not found");
+  }
+
   res.writeHead(200, {
     "content-type": MIME[extname(file)] ?? "application/octet-stream",
     ...(cacheControl ? { "cache-control": cacheControl } : {}),
   });
-  createReadStream(file).pipe(res);
+
+  // A file can still fail mid-stream (permissions, a race with a rebuild), so
+  // the listener stays even though the directory case is now handled above.
+  const stream = createReadStream(file);
+  stream.on("error", () => {
+    try {
+      res.end();
+    } catch {
+      // the response is already gone; nothing useful to do
+    }
+  });
+  stream.pipe(res);
 }
 
 async function probe(url) {

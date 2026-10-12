@@ -17,12 +17,17 @@ export default defineConfig({
     proxy: {
       "/tree.json": { target: TARGET, changeOrigin: true },
       "/version": { target: TARGET, changeOrigin: true },
+      "/map.json": { target: TARGET, changeOrigin: true },
+      "/whoami": { target: TARGET, changeOrigin: true },
     },
   },
   build: {
     outDir: "../../dist",
     emptyOutDir: true,
     rollupOptions: {
+      // One entry, one bundle. The map view is a second *view* of the same
+      // data, not a second page, so it rides along rather than becoming a
+      // second chunk someone has to wait for.
       input: resolve(import.meta.dirname, "src/public/index.html"),
     },
   },
