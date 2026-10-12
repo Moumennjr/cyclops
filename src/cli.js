@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
@@ -64,6 +64,34 @@ function waitForSignal() {
 // would grow.
 function isMapCommand(argv) {
   return argv[0] === "map" || argv[0] === "--map";
+}
+
+// `cyclops trace-fn <file> <fn>`: run one function instead of a whole program.
+// The other half of the bridge -- the map tells you what exists, this tells you
+// what it did.
+function isTraceFnCommand(argv) {
+  return argv[0] === "trace-fn";
+}
+
+function printTraceFnUsage() {
+  console.log(`usage: cyclops trace-fn <file.js> <function> [options]
+
+  traces one named function instead of running a whole program.
+
+  cyclops needs an entry point, so a function that is not exported is reached
+  through its module and the harness will say so if it cannot find it. Callers
+  found in the map are reported, because real arguments from a real call beat
+  anything this could invent.
+
+  options:
+    --arg <literal>   a real argument, repeatable: --arg 1 --arg '"x"'
+    --save <file>     write the generated harness here
+    --json            print the harness and its confidence, run nothing
+
+  confidence in the result:
+    caller   the arguments came from you
+    guess    synthesised from parameter names -- the trace may not reflect
+             what your code really passes`);
 }
 
 function parseMapArgs(argv) {
@@ -195,6 +223,8 @@ function printUsage() {
 
 async function main() {
   const argv = process.argv.slice(2);
+
+  if (isTraceFnCommand(argv)) return traceFnMain(argv);
 
   // The map is a subcommand and runs no program at all, so it returns before
   // any of the trace machinery is touched -- no spawn, no instrumentation, no
@@ -338,6 +368,116 @@ async function main() {
     await close();
   }
   process.exit(exitCode);
+}
+
+// The bridge: pick a function out of the map, give it arguments, trace it.
+async function traceFnMain(argv) {
+  const rest = argv.slice(1);
+  if (!rest.length || rest.includes("--help") || rest.includes("-h")) {
+    printTraceFnUsage();
+    return;
+  }
+
+  const positional = rest.filter((a) => !a.startsWith("--"));
+  const file = positional[0];
+  const fn = positional[1];
+  if (!file || !fn) {
+    printTraceFnUsage();
+    process.exit(1);
+  }
+
+  const args = [];
+  let save = null;
+  let json = false;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--arg") {
+      // Evaluated as JS so `--arg '"hello"'` and `--arg '[1,2]'` both mean what
+      // they look like. The user typed this; it is not attacker input.
+      args.push(evaluateLiteral(rest[++i]));
+    } else if (rest[i] === "--save") save = rest[++i];
+    else if (rest[i] === "--json") json = true;
+  }
+
+  const { harnessFor, callersInMap } = await import("./harness.js");
+  const { buildMap } = await import("./map.js");
+
+  const harness = harnessFor(resolve(process.cwd(), file), fn, {
+    args: args.length ? args : null,
+  });
+  if (harness.error) {
+    console.error(harness.error);
+    process.exit(1);
+  }
+
+  // Real arguments from a real caller are the best input available, so say
+  // where they could come from rather than leaving the guess unexplained.
+  let callersNote = "";
+  try {
+    const map = buildMap(process.cwd(), { maxFiles: 300 });
+    const found = callersInMap(map, fn);
+    if (found.callers.length) {
+      callersNote =
+        found.callers
+          .slice(0, 5)
+          .map((c) => `${c.name}${c.file ? ` (${c.file}:${c.line ?? "?"})` : ""}`)
+          .join(", ") + "\n";
+      callersNote =
+        `  called by: ${callersNote}` +
+        "  re-run with --arg to use a real call's arguments instead of a guess\n";
+    } else if (found.note) {
+      callersNote = `  ${found.note}\n`;
+    }
+  } catch {
+    // the map is a convenience here, never a precondition
+  }
+
+  if (json) {
+    process.stdout.write(JSON.stringify({
+      function: harness.functionName,
+      kind: harness.kind,
+      confidence: harness.confidence,
+      signature: harness.signature ?? null,
+      notes: harness.notes,
+      source: harness.source,
+    }, null, 2) + "\n");
+    return;
+  }
+
+  const harnessPath = save
+    ? resolve(process.cwd(), save)
+    : join(dirname(resolve(process.cwd(), file)), `.cyclops-fn-${fn}.mjs`);
+  writeFileSync(harnessPath, harness.source);
+
+  console.error(`[cyclops] harness for ${harness.functionName}() — confidence: ${harness.confidence}`);
+  if (callersNote) process.stderr.write(callersNote);
+  for (const note of harness.notes) console.error(`[cyclops] ${note}`);
+
+  const result = traceToFile([harnessPath], { cwd: process.cwd() });
+  try {
+    unlinkSync(harnessPath);
+  } catch {}
+
+  if (!result.ok) {
+    console.error(result.error || "could not trace it");
+    process.exit(result.exitCode ?? 1);
+  }
+
+  process.stdout.write(result.stdout ?? "");
+  process.stderr.write(
+    renderTree(result.tree.roots, { maxDepth: 12, timing: true }) + "\n",
+  );
+  console.error(`[cyclops] trace written to ${result.outFile}`);
+}
+
+// Accepts a JS literal typed on the command line.
+function evaluateLiteral(text) {
+  try {
+    return Function(`"use strict"; return (${text});`)();
+  } catch {
+    // Not a literal -- take it as a plain string rather than failing, so
+    // `--arg someName` means the string rather than a syntax error.
+    return text;
+  }
 }
 
 // The static half of v2: read a project, write its map, optionally draw it.

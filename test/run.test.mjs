@@ -38,6 +38,11 @@ import {
 import { snapshot } from "../src/snapshot.js";
 import { watchTrace } from "../src/watch.js";
 import { trace } from "../src/engine.js";
+import { buildMap } from "../src/map.js";
+import { layoutMap, renderMap, renderMapFlat } from "../src/maplayout.js";
+import { analyzeMap, renderMapReport, findCycles } from "../src/mapanalyze.js";
+import { scanFile } from "../src/scan.js";
+import { harnessFor, callersInMap } from "../src/harness.js";
 import { diffTrees, renderDiff } from "../src/diff.js";
 // The vim/neovim plugin implements these two helpers in vimscript. They are
 // mirrored here so the *algorithm* is covered by the suite even on a machine

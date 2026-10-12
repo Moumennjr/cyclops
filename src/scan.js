@@ -223,6 +223,7 @@ export function scanFile(path, source) {
         generator: !!decl.generator,
         async: !!decl.async,
         params: (decl.params || []).length,
+        paramsList: paramList(decl.params),
       });
     } else if (decl.type === "VariableDeclaration") {
       for (const d of decl.declarations) {
@@ -239,6 +240,7 @@ export function scanFile(path, source) {
             generator: !!d.init.generator,
             async: !!d.init.async,
             params: (d.init.params || []).length,
+            paramsList: paramList(d.init.params),
           });
         }
       }
@@ -270,6 +272,7 @@ export function scanFile(path, source) {
             generator: !!member.generator,
             async: !!member.async,
             params: (member.params || []).length,
+            paramsList: paramList(member.params),
             owner: name,
           });
         } else if (member.type === "ClassProperty" && member.value &&
@@ -285,6 +288,7 @@ export function scanFile(path, source) {
             generator: false,
             async: !!member.value.async,
             params: (member.value.params || []).length,
+            paramsList: paramList(member.value.params),
             owner: name,
           });
         }
@@ -292,7 +296,46 @@ export function scanFile(path, source) {
     }
   }
 
-  function kindOf(fn) {
+  // Parameter names and default expressions, as source text.
+//
+// Recorded because the harness needs them to synthesise a call, and re-parsing
+// to recover them later would mean parsing the same file twice. Default
+// expressions are kept as text rather than evaluated: `a = compute()` is not
+// something to run at scan time.
+function paramList(params) {
+  return (params || []).map((p) => {
+    let name = null;
+    if (p.type === "Identifier") name = p.name;
+    else if (p.type === "AssignmentPattern" && p.left.type === "Identifier") {
+      return { name: p.left.name, defaultValue: sourceText(p.right) };
+    } else if (p.type === "RestElement" && p.argument.type === "Identifier") {
+      return { name: p.argument.name, rest: true };
+    } else if (p.type === "ObjectPattern" || p.type === "ArrayPattern") {
+      // Destructured: name it by its bound identifiers so a placeholder still
+      // has something to be named after.
+      name = Object.values(t.getBindingIdentifiers(p))
+        .map((id) => id.name)[0] || "arg";
+    }
+    return { name, defaultValue: null };
+  });
+}
+
+// The source text of a node, without keeping the node.
+function sourceText(node) {
+  if (!node) return null;
+  if (node.type === "NumericLiteral") return String(node.value);
+  if (node.type === "StringLiteral") return JSON.stringify(node.value);
+  if (node.type === "BooleanLiteral") return String(node.value);
+  if (node.type === "NullLiteral") return "null";
+  if (node.type === "Identifier") return node.name;
+  if (node.type === "UnaryExpression" && node.operator === "-") {
+    const inner = sourceText(node.argument);
+    return inner ? `-${inner}` : null;
+  }
+  return null; // anything computed is not safe to replay at scan time
+}
+
+function kindOf(fn) {
     if (fn.generator) return fn.async ? "async-generator" : "generator";
     if (fn.async) return "async";
     return "function";

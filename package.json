@@ -67,7 +67,8 @@
     "./scan": "./src/scan.js",
     "./map": "./src/map.js",
     "./maplayout": "./src/maplayout.js",
-    "./mapanalyze": "./src/mapanalyze.js"
+    "./mapanalyze": "./src/mapanalyze.js",
+    "./harness": "./src/harness.js"
   },
   "main": "./src/index.js"
 }
