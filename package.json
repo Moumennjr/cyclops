@@ -64,7 +64,8 @@
     "./package.json": "./package.json",
     "./editor": "./src/editor.js",
     "./diff": "./src/diff.js",
-    "./scan": "./src/scan.js"
+    "./scan": "./src/scan.js",
+    "./map": "./src/map.js"
   },
   "main": "./src/index.js"
 }
