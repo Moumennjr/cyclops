@@ -63,7 +63,8 @@
     "./plugin": "./plugin/opencode.js",
     "./package.json": "./package.json",
     "./editor": "./src/editor.js",
-    "./diff": "./src/diff.js"
+    "./diff": "./src/diff.js",
+    "./scan": "./src/scan.js"
   },
   "main": "./src/index.js"
 }
