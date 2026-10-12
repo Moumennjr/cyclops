@@ -1,7 +1,7 @@
 {
   "name": "v0",
-  "version": "1.0.0",
-  "description": "Trace any JavaScript or TypeScript program as an interactive call tree",
+  "version": "2.0.0",
+  "description": "Read a project as a map, and trace it as a call tree \u2014 static structure and runtime behaviour over one engine",
   "homepage": "https://github.com/Moumennjr/cyclops#readme",
   "bugs": {
     "url": "https://github.com/Moumennjr/cyclops/issues"
