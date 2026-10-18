@@ -125,7 +125,13 @@ export function visibleNodes(map, options = {}) {
       draggable: true,
       data: { ...n, isModule },
       className: [
-        n.kind === "module" ? "map-mod" : n.kind === "external" ? "map-ext" : "map-fn",
+        n.kind === "module"
+          ? "map-mod"
+          : n.kind === "external"
+            ? "map-ext"
+            : n.kind === "local"
+              ? "map-local"
+              : "map-fn",
         n.isEntry ? "map-entry" : "",
       ].filter(Boolean).join(" "),
     });

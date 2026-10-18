@@ -22,7 +22,7 @@
 import { scanFile, EXTRACTED, INFERRED, AMBIGUOUS } from "./scan.js";
 import { resolveTargets, isTraceable } from "./targets.js";
 import { resolveLocal } from "./graph.js";
-import { basename, dirname, relative, resolve } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 
 // Call targets that are built-ins or language features. They are never edges:
 // `String(x)` is not a fact about this codebase, and including it would put a
@@ -44,6 +44,21 @@ const GLOBALS = new Set([
 const EXTERNAL_PREFIX = /^(node:|bun:|deno:|data:)/;
 
 /**
+ * A path relative to the scan root, or just the tail when the file sits
+ * outside it.
+ *
+ * The tail rather than a "../../../elsewhere" chain: node ids end up in URLs,
+ * in the map JSON, and in React Flow's DOM, and a wall of `../` in all three
+ * helps nobody. The file field keeps the full relative path for the label.
+ */
+function shortPath(file, cwd) {
+  const rel = relative(cwd, file).split(sep).join("/");
+  if (!rel.startsWith("..")) return rel;
+  const parts = file.split(/[\\/]/);
+  return parts.length > 2 ? parts.slice(-3).join("/") : file.split(/[\\/]/).pop();
+}
+
+/**
  * Scans a target and builds the project graph.
  *
  * options:
@@ -52,14 +67,24 @@ const EXTERNAL_PREFIX = /^(node:|bun:|deno:|data:)/;
  *   includeTests   keep *.test.js / *.spec  (default false)
  *   includeExternal draw edges to packages   (default false)
  */
+/** Node id for a shadowing local binding. */
+export function localNodeId(shortFile, name) {
+  return `l:${shortFile}::${name}`;
+}
+
 export function buildMap(target, options = {}) {
   const {
-    cwd = process.cwd(),
+    // A target outside cwd would otherwise produce ids like
+    // "../../../elsewhere/app.js" -- unreadable in a URL, in a JSON file, and in
+    // the browser's node ids. The common root of cwd and every scanned file is
+    // used instead, so ids stay short and a viewer can label them with the tail.
+    cwd: requestedCwd = process.cwd(),
     maxFiles = 500,
     includeTests = false,
     includeExternal = false,
   } = options;
 
+  const cwd = resolve(requestedCwd);
   const plan = resolveTargets([target], { cwd });
   if (plan.message) {
     return { error: plan.message, nodes: [], edges: [], files: [], skipped: [] };
@@ -105,7 +130,7 @@ export function buildMap(target, options = {}) {
   const externalNodes = new Map();
 
   for (const [file, scan] of scans) {
-    const short = relative(cwd, file).split("\\").join("/");
+    const short = shortPath(file, cwd);
 
     addNode({
       id: `m:${short}`,
@@ -158,7 +183,7 @@ export function buildMap(target, options = {}) {
   };
 
   for (const [file, scan] of scans) {
-    const short = relative(cwd, file).split("\\").join("/");
+    const short = shortPath(file, cwd);
     const modId = `m:${short}`;
 
     // contains
@@ -174,7 +199,7 @@ export function buildMap(target, options = {}) {
       }
       const target = resolveLocal(imp.spec, file);
       if (target && scans.has(resolve(target))) {
-        addEdge(modId, `m:${relative(cwd, resolve(target)).split("\\").join("/")}`,
+        addEdge(modId, `m:${shortPath(resolve(target), cwd)}`,
           "imports", EXTRACTED);
       } else {
         // A bare specifier that is not a builtin is a package.
@@ -185,12 +210,31 @@ export function buildMap(target, options = {}) {
     }
   }
 
+  // A node for each shadowing local, so a call to one has something to point
+  // at. Kept visible rather than dropped: "this calls a function defined right
+  // here" is a real relationship, and hiding it makes the map look simpler than
+  // it is -- which is how a map starts lying.
+  for (const [file, scan] of scans) {
+    const short = shortPath(file, cwd);
+    for (const call of scan.calls) {
+      if (call.confidence !== "SHADOWED") continue;
+      addNode({
+        id: localNodeId(short, call.to),
+        kind: "local",
+        label: `${call.to} (local)`,
+        file: short,
+        line: call.shadow?.line ?? null,
+        owner: call.from || null,
+      });
+    }
+  }
+
   // ---- calls --------------------------------------------------------------
   // A name index across every scanned function, so a cross-file call can be
   // resolved. Maps name -> [{file, exported}].
   const byName = new Map();
   for (const [file, scan] of scans) {
-    const short = relative(cwd, file).split("\\").join("/");
+    const short = shortPath(file, cwd);
     for (const fn of scan.functions) {
       if (!byName.has(fn.name)) byName.set(fn.name, []);
       byName.get(fn.name).push({
@@ -225,7 +269,7 @@ export function buildMap(target, options = {}) {
     new Set(scan.functions.map((f) => f.name));
 
   for (const [file, scan] of scans) {
-    const short = relative(cwd, file).split("\\").join("/");
+    const short = shortPath(file, cwd);
     const own = localNames(file, scan);
     const bindings = importBindings.get(file) || new Map();
     const modId = `m:${short}`;
@@ -236,6 +280,22 @@ export function buildMap(target, options = {}) {
         : modId; // a call at module top level
       const target = call.to;
       if (!target) continue;
+
+      // 0. a name that is shadowed by a local binding is not the import.
+      //
+      // `const helper = (y) => y * 99; helper(1)` inside a function that also
+      // imports `helper` is a call to a *local*, in a different function, in
+      // this file. Attaching it to the import draws a confident arrow to
+      // something that was never called -- so instead it is recorded as an
+      // unresolved local, which is the truth.
+      if (call.confidence === "SHADOWED") {
+        // Unless the local *is* the function being defined, in which case this
+        // is a normal local call and the tier below handles it correctly.
+        if (!(call.from && own.has(target))) {
+          addEdge(fromId, localNodeId(short, target), "calls", AMBIGUOUS, call.line);
+        }
+        continue;
+      }
 
       // 1. local, exact -- nothing else could be meant
       if (own.has(target)) {
@@ -248,7 +308,7 @@ export function buildMap(target, options = {}) {
         const dest = bindings.get(target);
         const destScan = scans.get(dest.file);
         if (destScan) {
-          const destShort = relative(cwd, dest.file).split("\\").join("/");
+          const destShort = shortPath(dest.file, cwd);
           if (dest.exported === "*") {
             // namespace import: we know the module, not the function
             addEdge(fromId, `m:${destShort}`, "calls-module", EXTRACTED, call.line);
@@ -275,7 +335,7 @@ export function buildMap(target, options = {}) {
         const dest = bindings.get(call.via);
         const destScan = scans.get(dest.file);
         if (destScan) {
-          const destShort = relative(cwd, dest.file).split("\\").join("/");
+          const destShort = shortPath(dest.file, cwd);
           const member = target.slice(call.via.length + 1);
           const match = destScan.functions.find(
             (f) => f.name === member || f.name.endsWith(`.${member}`),
@@ -310,7 +370,7 @@ export function buildMap(target, options = {}) {
     error: null,
     cwd,
     target,
-    files: [...scans.keys()].map((f) => relative(cwd, f).split("\\").join("/")),
+    files: [...scans.keys()].map((f) => shortPath(f, cwd)),
     skipped,
     truncated: all.length > maxFiles,
     totalFiles: all.length,

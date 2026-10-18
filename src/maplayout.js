@@ -122,7 +122,7 @@ export function layoutMap(map, options = {}) {
 
   // Lay each row out left to right, modules first: the structural skeleton
   // reads left to right and the detail follows it.
-  const kindRank = { module: 0, class: 1, function: 2, external: 3 };
+  const kindRank = { module: 0, class: 1, function: 2, local: 3, external: 4 };
   for (const row of rows.values()) {
     row.sort((a, b) => {
       const r = (kindRank[a.kind] ?? 9) - (kindRank[b.kind] ?? 9);
@@ -412,7 +412,7 @@ function belongsTo(fn, modId, map) {
 export function mapCounts(map) {
   const counts = {
     files: (map.files || []).length,
-    modules: 0, functions: 0, classes: 0, external: 0,
+    modules: 0, functions: 0, classes: 0, external: 0, locals: 0,
     calls: 0, inferred: 0, ambiguous: 0,
     imports: 0, perModule: new Map(),
   };
@@ -423,6 +423,7 @@ export function mapCounts(map) {
     } else if (n.kind === "class") counts.classes++;
     else if (n.kind === "function") counts.functions++;
     else if (n.kind === "external") counts.external++;
+    else if (n.kind === "local") counts.locals++;
   }
   for (const e of map.edges || []) {
     if (e.relation === "imports") {

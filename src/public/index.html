@@ -391,6 +391,14 @@
         background: #fff;
         border-left: 2px solid #cbd5e1;
       }
+      /* A shadowing local: defined in the same file, shadowing an import. Dashed
+         because its relationship to the imported name is the interesting part. */
+      #root .map-node.map-local {
+        background: #fffbeb;
+        border-color: #fcd34d;
+        border-style: dashed;
+        color: #78350f;
+      }
       #root .map-node.map-ext {
         background: #fffbeb;
         border-color: #fcd34d;

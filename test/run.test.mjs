@@ -843,6 +843,75 @@ test("the map resolves calls across files and marks what it cannot prove", () =>
   rmSync(root, { recursive: true, force: true });
 });
 
+test("a local shadowing an import is not reported as a call to the import", () => {
+  // The bug this covers is the worst a map can do: it drew a *confident*
+  // arrow from run() to helper() in lib.js, when the call was to a local
+  // closure defined two lines above. Nothing about the map said otherwise.
+  const root = mkdtempSync(join(tmpdir(), "cyc-shadow-"));
+  writeFileSync(join(root, "lib.js"), "export function helper(x) { return x; }\n");
+  writeFileSync(join(root, "app.js"), [
+    'import { helper } from "./lib.js";',
+    "function run() {",
+    "  const helper = (y) => y * 99;",
+    "  return helper(1);",
+    "}",
+    "run();",
+  ].join("\n"));
+
+  const scan = scanFile(join(root, "app.js"));
+  const shadowed = scan.calls.find((c) => c.to === "helper" && c.from === "run");
+  assert.equal(shadowed.confidence, "SHADOWED",
+    "the scanner marks the shadowed call rather than resolving it");
+  assert.equal(shadowed.shadow.scope, "block");
+
+  const map = buildMap(root, { cwd: root });
+  const byId = new Map(map.nodes.map((n) => [n.id, n]));
+
+  const edge = map.edges.find(
+    (e) => e.relation === "calls" && byId.get(e.source)?.label === "run",
+  );
+  assert.ok(edge, "the call is still an edge");
+  assert.equal(
+    byId.get(edge.target)?.file.split("/").pop(), "app.js",
+    "pointing at the local in app.js, not the imported one in lib.js",
+  );
+  assert.notEqual(edge.confidence, "EXTRACTED",
+    "and NOT marked proven, because it is not proven");
+  assert.match(byId.get(edge.target)?.label, /local/);
+
+  // The imported helper is still a node, still connected by the import -- it
+  // is simply not what run() called.
+  assert.ok(map.nodes.some((n) => n.label === "helper" && n.kind === "function"));
+  assert.ok(map.edges.some((e) => e.relation === "imports"),
+    "the import edge is untouched");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a plain module-level call is not mistaken for a shadow", () => {
+  // The first cut of the shadowing fix filtered *any* binding that matched the
+  // enclosing declaration's name, which turned `function run(){}; run()` into a
+  // shadow and lost a real call edge.
+  const root = mkdtempSync(join(tmpdir(), "cyc-shadow2-"));
+  writeFileSync(join(root, "solo.js"), [
+    "function helper() { return 1; }",
+    "function run() { return helper(); }",
+    "run();",
+  ].join("\n"));
+
+  const scan = scanFile(join(root, "solo.js"));
+  assert.equal(
+    scan.calls.find((c) => c.to === "run" && c.from === null).confidence,
+    "EXTRACTED",
+    "calling the function you just declared is not a shadow",
+  );
+  assert.equal(
+    scan.calls.find((c) => c.to === "helper" && c.from === "run").confidence,
+    "EXTRACTED",
+    "and a sibling function call is not either",
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("the map lays out every node without collisions", () => {
   // The layout bug this covers was 52 of 98 nodes on top of each other, from
   // a `siblings` list that excluded the node being placed -- so findIndex

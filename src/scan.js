@@ -349,6 +349,99 @@ function kindOf(fn) {
     return null;
   }
 
+  // ---- local bindings ----------------------------------------------------
+  // Collected so a call to a name that is *also* an import can be told apart
+  // from a call to the import.
+  //
+  // Without this, `const helper = (y) => y * 99; helper(1)` inside a function
+  // that also imports `helper` is recorded as a call to the *imported* one --
+  // a different function, in a different file, marked EXTRACTED. The map then
+  // draws a confident arrow to a function that was never called, which is the
+  // one thing a map must never do.
+  //
+  // Scoped, because the whole point is lexical: a local shadows the import only
+  // from where it is declared onward.
+  const locals = []; // { name, owner, scope, line, isParam }
+  const recordBinding = (name, owner, scope, line, isParam = false) => {
+    if (!name) return;
+    locals.push({ name, owner, scope, line, isParam });
+  };
+
+  /** Names bound by a function: its parameters, and any let/const inside it. */
+  const collectFunctionScope = (node, owner) => {
+    for (const p of node.params || []) {
+      for (const id of Object.values(t.getBindingIdentifiers(p))) {
+        recordBinding(id.name, owner, "function", node.loc?.start.line ?? null, true);
+      }
+    }
+    const walkBody = (n) => {
+      if (!n || typeof n !== "object") return;
+      if (Array.isArray(n)) {
+        for (const item of n) walkBody(item);
+        return;
+      }
+      if (n.type === "VariableDeclaration") {
+        for (const d of n.declarations) {
+          // Any declarator binds the name, including `const f = () => {}`.
+          // A const arrow is NOT a self-reference: it shadows whatever was
+          // imported under that name, which is the whole point.
+          for (const id of Object.values(t.getBindingIdentifiers(d.id))) {
+            recordBinding(id.name, owner, "block", n.loc?.start.line ?? null);
+          }
+        }
+      }
+      if (n.type === "FunctionDeclaration" && n.id) {
+        recordBinding(n.id.name, owner, "declaration", n.loc?.start.line ?? null);
+      }
+      for (const key of Object.keys(n)) {
+        if (key === "loc" || key.endsWith("Comments")) continue;
+        walkBody(n[key]);
+      }
+    };
+    if (node.body) walkBody(node.body);
+  };
+
+  // Module-level bindings shadow an import for the whole module, so they are
+  // recorded too -- `const helper = ...` at the top of the file is the same bug
+  // one level up.
+  const collectModuleScope = () => {
+    for (const stmt of body) {
+      const decl = stmt.type === "ExportNamedDeclaration" ? stmt.declaration : stmt;
+      if (decl && decl.type === "VariableDeclaration") {
+        for (const d of decl.declarations) {
+          for (const id of Object.values(t.getBindingIdentifiers(d.id))) {
+            recordBinding(id.name, null, "module", decl.loc?.start.line ?? null);
+          }
+        }
+      }
+      if (decl && decl.type === "FunctionDeclaration" && decl.id) {
+        recordBinding(decl.id.name, null, "declaration", decl.loc?.start.line ?? null);
+      }
+    }
+  };
+
+  /**
+   * Does a local `name` shadow an import at `line`, for `owner`?
+   *
+   * A binding that *is* the enclosing declaration is not a shadow: `function
+   * run(){}; run()` at module level is a call to run, not a reference to some
+   * other `run` that the declaration happens to shadow.
+   */
+  const shadowedBy = (name, owner, line) => {
+    let best = null;
+    for (const b of locals) {
+      if (b.name !== name) continue;
+      if (b.owner !== owner) continue;
+      if (b.scope === "declaration") continue;
+      // A binding only shadows from where it is declared onward -- hoisting
+      // means a `const` is *not* visible above its own line, which is what
+      // makes `const x = x()` an error rather than infinite recursion.
+      if (line !== null && b.line !== null && line < b.line) continue;
+      if (!best || (b.line ?? 0) > (best.line ?? 0)) best = b;
+    }
+    return best;
+  };
+
   // ---- inside functions ---------------------------------------------------
   // Walk each top-level function separately, so every call gets attributed to
   // the function it sits in. A call outside any function belongs to the module.
@@ -391,12 +484,19 @@ function kindOf(fn) {
         }
 
         if (target) {
+          const shadow = shadowedBy(target, owner, n.loc ? n.loc.start.line : null);
           calls.push({
             from: owner,
             to: target,
             via: via,
             line: n.loc ? n.loc.start.line : null,
-            confidence,
+            // A shadowed name is not the import at all. Marking it EXTRACTED
+            // would put a proven-looking arrow on a guess; the graph builder
+            // turns this into "resolves locally to something not in the map".
+            confidence: shadow ? "SHADOWED" : confidence,
+            shadow: shadow
+              ? { name: shadow.name, scope: shadow.scope, line: shadow.line }
+              : null,
           });
         }
       }
@@ -420,12 +520,16 @@ function kindOf(fn) {
         : stmt;
       if (!decl) continue;
       if (decl.type === "FunctionDeclaration") {
-        visitCalls(decl.body, decl.id ? decl.id.name : "anonymous");
+        const name = decl.id ? decl.id.name : "anonymous";
+        collectFunctionScope(decl, name);
+        visitCalls(decl.body, name);
       } else if (decl.type === "ClassDeclaration") {
         if (decl.id) {
           for (const member of decl.body.body) {
             if ((member.type === "ClassMethod" || member.type === "ClassPrivateMethod") && member.body) {
-              visitCalls(member.body, `${decl.id.name}.${nameOfKey(member.key, member.computed)}`);
+              const mname = `${decl.id.name}.${nameOfKey(member.key, member.computed)}`;
+              collectFunctionScope(member, mname);
+              visitCalls(member.body, mname);
             }
           }
         }
@@ -433,13 +537,16 @@ function kindOf(fn) {
         for (const d of decl.declarations) {
           if (d.init && (d.init.type === "ArrowFunctionExpression" ||
                          d.init.type === "FunctionExpression")) {
-            visitCalls(d.init.body, d.id && d.id.name ? d.id.name : "anonymous");
+            const name = d.id && d.id.name ? d.id.name : "anonymous";
+            collectFunctionScope(d.init, name);
+            visitCalls(d.init.body, name);
           }
         }
       }
     }
   };
 
+  collectModuleScope();
   walkBodies(body, null);
   topLevel = body.length > 0;
 
@@ -469,6 +576,7 @@ function kindOf(fn) {
     importedBindings: imported,
     functions,
     calls,
+    locals,
     topLevel,
     error: null,
   };
