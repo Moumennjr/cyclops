@@ -117,6 +117,29 @@ export function harnessFor(file, functionName, options = {}) {
     };
   }
 
+  // A real call's arguments beat anything invented, so they are checked before
+  // the signature is even read.
+  if (!args && scan.calls) {
+    const site = callSiteArgs(scan, functionName);
+    if (site) {
+      return {
+        confidence: "call-site",
+        functionName: localName,
+        kind: target.kind,
+        notes: [
+          `replayed the arguments from ${site.from ?? "a caller"}` +
+            `${site.line ? ` at line ${site.line}` : ""}`,
+        ],
+        replayedFrom: site,
+        source:
+          sourceHeader(file) +
+          importPrelude(file, scan, target, localName) +
+          `const __result = (${localName})(${site.args.join(", ")});\n` +
+          `console.log("returned:", __result);\n`,
+      };
+    }
+  }
+
   // Recover a signature so the placeholders are shaped like real parameters.
   const params = parameterNames(file, localName, target);
   const notes = [];
@@ -154,23 +177,27 @@ export function harnessFor(file, functionName, options = {}) {
 }
 
 // The program cannot call a function it has not imported, so the import is part
-// of the answer rather than an afterthought. The specifier is relative to
-// wherever the harness ends up, so it is computed from the target's own
-// directory and written next to the file -- which is also where a relative
-// import will resolve.
+// of the answer rather than an afterthought.
+//
+// **Dynamic**, not static, and that is not a style choice. ESM evaluates every
+// static import *before* the importing module's body runs, so a static import
+// would execute the target module -- including its top-level calls -- before
+// the tracer has installed itself on globalThis:
+//
+//     ReferenceError: __enter is not defined
+//     at run (…/.cyclops-t-646105.mjs:14:17)
+//
+// which is the target module's own top-level code calling a traced function. A
+// dynamic import defers evaluation to after this module's body, by which point
+// the tracer exists. Top-level await makes that work at module scope.
 function importPrelude(file, scan, target, localName) {
-  // A named function: import the module and pull it out.
-  if (target.exported && target.kind !== "method") {
-    const spec = "./" + file.split(/[\\/]/).pop();
-    return `import { ${localName} } from ${JSON.stringify(spec)};\n`;
-  }
-  // Not exported, or a method: the only honest way to reach it is to load the
-  // module and say so, rather than pretending a local binding exists.
+  const spec = "./" + file.split(/[\\/]/).pop();
   return (
-    `import * as __mod from ${JSON.stringify("./" + file.split(/[\\/]/).pop())};\n` +
+    `const __mod = await import(${JSON.stringify(spec)});\n` +
     `const ${localName} = __mod.${localName} ?? __mod.default?.${localName};\n` +
     `if (typeof ${localName} !== "function") {\n` +
-    `  console.error("harness: ${localName} is not exported by ${file}; add an export or trace its caller");\n` +
+    `  console.error("harness: ${localName} is not exported by ${file}; ` +
+    `add an export, or trace the function that calls it");\n` +
     `  process.exit(2);\n` +
     `}\n`
   );
@@ -207,6 +234,39 @@ function sourceHeader(file) {
  * arguments instead of guesses. This is what makes "trace this" usually land on
  * a high-confidence harness rather than a fabricated one.
  */
+/**
+ * Finds a real call to `functionName` and returns its arguments verbatim.
+ *
+ * This is what turns `confidence: guess` into `confidence: call-site`. A
+ * placeholder is a guess wearing a plausible shape; the arguments at a line the
+ * program actually ran are not.
+ *
+ * Returns null when every call site uses non-literal arguments -- replaying a
+ * variable the program computed would be a guess in a literal's clothes.
+ */
+export function callSiteArgs(scan, functionName) {
+  const candidates = scan.calls.filter(
+    (c) => c.to === functionName &&
+      !c.hasNonLiteralArgs &&
+      c.argText &&
+      c.argText.length > 0,
+  );
+  if (!candidates.length) return null;
+
+  // Prefer a caller in a test or fixture: a fixture's arguments are written to
+  // demonstrate the function, while an application's are whatever happened to
+  // be in scope.
+  const fromFixture = candidates.find((c) => /fixture|test|spec/i.test(c.from ?? ""));
+  const pick = fromFixture ?? candidates[0];
+
+  return {
+    args: pick.argText,
+    from: pick.from,
+    line: pick.line,
+    source: "call-site",
+  };
+}
+
 export function callersInMap(map, functionName) {
   const byId = new Map((map.nodes || []).map((n) => [n.id, n]));
   const label = (id) => byId.get(id)?.label ?? id;

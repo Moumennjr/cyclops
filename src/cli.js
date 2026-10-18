@@ -413,17 +413,23 @@ async function traceFnMain(argv) {
   // where they could come from rather than leaving the guess unexplained.
   let callersNote = "";
   try {
-    const map = buildMap(process.cwd(), { maxFiles: 300 });
+    // The map covers the target's own project, not the cwd. Scanning cwd gave
+    // "called by: main (test/fixtures/async.js:15)" for a file that has nothing
+    // to do with that fixture -- confidently wrong, which is worse than silent.
+    const projectRoot = dirname(resolve(process.cwd(), file));
+    const map = buildMap(projectRoot, { maxFiles: 300 });
     const found = callersInMap(map, fn);
     if (found.callers.length) {
+      const list = found.callers
+        .slice(0, 5)
+        .map((c) => `${c.name}${c.file ? ` (${c.file}:${c.line ?? "?"})` : ""}`)
+        .join(", ");
+      // Only worth saying when the harness did not already use a real call.
       callersNote =
-        found.callers
-          .slice(0, 5)
-          .map((c) => `${c.name}${c.file ? ` (${c.file}:${c.line ?? "?"})` : ""}`)
-          .join(", ") + "\n";
-      callersNote =
-        `  called by: ${callersNote}` +
-        "  re-run with --arg to use a real call's arguments instead of a guess\n";
+        `  called by: ${list}\n` +
+        (harness.confidence === "call-site"
+          ? "  its arguments were replayed from one of those calls\n"
+          : "  re-run with --arg to use a real call's arguments instead of a guess\n");
     } else if (found.note) {
       callersNote = `  ${found.note}\n`;
     }

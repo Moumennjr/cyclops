@@ -321,6 +321,58 @@ function paramList(params) {
   });
 }
 
+/**
+ * A call argument as runnable source text, or null if it is not a literal.
+ *
+ * `add(3, 4)` yields ["3", "4"] and can be replayed exactly. `add(x, y)` yields
+ * nulls, because substituting a placeholder for a variable the program computed
+ * is a guess -- and a guess that looks exactly like a replay.
+ */
+function literalOf(node) {
+  if (!node) return null;
+  switch (node.type) {
+    case "NumericLiteral":
+    case "StringLiteral":
+    case "BooleanLiteral":
+      return sourceText(node);
+    case "NullLiteral":
+      return "null";
+    case "Identifier":
+      // undefined and NaN are names, but fixed values, so they are literal.
+      if (node.name === "undefined" || node.name === "NaN" ||
+          node.name === "Infinity") {
+        return node.name;
+      }
+      return null;
+    case "UnaryExpression":
+      if (node.operator === "-" || node.operator === "+") {
+        const inner = literalOf(node.argument);
+        return inner === null ? null : node.operator + inner;
+      }
+      if (node.operator === "!") {
+        const inner = literalOf(node.argument);
+        return inner === null ? null : `!${inner}`;
+      }
+      return null;
+    case "ArrayExpression": {
+      const parts = node.elements.map((e) => literalOf(e));
+      return parts.some((p) => p === null) ? null : `[${parts.join(", ")}]`;
+    }
+    case "ObjectExpression": {
+      const parts = [];
+      for (const prop of node.properties || []) {
+        const key = nameOfKey(prop.key, prop.computed);
+        const val = literalOf(prop.value);
+        if (key === null || val === null) return null;
+        parts.push(`${key}: ${val}`);
+      }
+      return `{ ${parts.join(", ")} }`;
+    }
+    default:
+      return null;
+  }
+}
+
 // The source text of a node, without keeping the node.
 function sourceText(node) {
   if (!node) return null;
@@ -497,6 +549,16 @@ function kindOf(fn) {
             shadow: shadow
               ? { name: shadow.name, scope: shadow.scope, line: shadow.line }
               : null,
+            // The arguments at this call site, as source text, capped.
+            //
+            // This is what lets `trace-fn` replay a *real* call instead of
+            // inventing one: the map knows where `add(3, 4)` is, so the harness
+            // can use 3 and 4 rather than `{}` and `{}`. Literal arguments only
+            // -- an identifier is a guess wearing a literal's clothes.
+            argText: (n.arguments || [])
+              .map((a) => literalOf(a))
+              .filter((a) => a !== null),
+            hasNonLiteralArgs: (n.arguments || []).some((a) => literalOf(a) === null),
           });
         }
       }

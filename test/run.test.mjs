@@ -1050,8 +1050,8 @@ test("trace-fn generates a runnable harness and says how much to trust it", () =
   // Caller-supplied arguments are the best input available.
   const withArgs = harnessFor(lib, "add", { args: [3, 4] });
   assert.equal(withArgs.confidence, "caller");
-  assert.match(withArgs.source, /import \{ add \} from/,
-    "the harness imports the function rather than assuming a local binding");
+  assert.match(withArgs.source, /const __mod = await import\("\.\/lib\.js"\)/,
+    "the harness loads the module rather than assuming a local binding");
 
   // Guessed arguments are labelled, and the label names each guess.
   const guessed = harnessFor(lib, "add");
@@ -1076,6 +1076,74 @@ test("trace-fn generates a runnable harness and says how much to trust it", () =
   assert.match(missing.error, /not in/);
   assert.match(missing.error, /It has:/, "and lists what is actually there");
 
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("trace-fn replays a real call's arguments rather than guessing", () => {
+  // The difference between a trace of what the program does and a trace of what
+  // the tracer imagined. `add(x, y)` with invented `{}` arguments still returns
+  // something and still produces a plausible-looking tree.
+  const root = mkdtempSync(join(tmpdir(), "cyc-callsite-"));
+  const lib = join(root, "t.js");
+  writeFileSync(lib, [
+    "export function add(a, b) { return a + b; }",
+    "export function run() { return add(3, 4); }",
+    'export function obj() { return add({ x: [1, 2], y: "s", z: true }); }',
+    "export function vars(q) { return add(q, q); }",
+    "run();",
+  ].join("\n"));
+
+  // A call with literal arguments is replayed.
+  const replayed = harnessFor(lib, "add");
+  assert.equal(replayed.confidence, "call-site");
+  assert.match(replayed.source, /\(add\)\(3, 4\)/,
+    "the real arguments, not two empty objects");
+  assert.ok(
+    replayed.notes.some((n) => /replayed the arguments from run/.test(n)),
+    "and where they came from",
+  );
+
+  // Composite literals survive too.
+  const withObject = scanFile(lib);
+  const objCall = withObject.calls.find((c) => c.from === "obj" && c.to === "add");
+  assert.equal(objCall.hasNonLiteralArgs, false);
+  assert.match(objCall.argText[0], /x: \[1, 2\]/);
+
+  // A call whose arguments are variables is NOT replayed: substituting a
+  // placeholder for something the program computed is a guess in a literal's
+  // clothes, and it would look identical to a real replay.
+  const varsHarness = harnessFor(lib, "vars");
+  assert.notEqual(varsHarness.confidence, "call-site",
+    "a call with computed arguments is not replayed");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a harness imports its target dynamically, not statically", () => {
+  // ESM evaluates static imports before the importing module's body, so a
+  // static import ran the target's top-level code before the tracer had
+  // installed itself -- ReferenceError: __enter is not defined, from inside
+  // the very file being traced.
+  const root = mkdtempSync(join(tmpdir(), "cyc-dyn-"));
+  const lib = join(root, "side.js");
+  writeFileSync(lib, [
+    "export function target() { return 42; }",
+    "function topLevel() { return target(); }",  // runs on import
+    "topLevel();",
+    "",
+  ].join("\n"));
+
+  const harness = harnessFor(lib, "target", { args: [] });
+  assert.match(harness.source, /await import\(/,
+    "the import is dynamic, so it is evaluated after the tracer exists");
+  assert.doesNotMatch(harness.source, /^import /m,
+    "and there is no static import that would be hoisted above it");
+
+  const prog = join(root, "prog.mjs");
+  writeFileSync(prog, harness.source);
+  const result = trace("prog.mjs", { cwd: root });
+  assert.equal(result.ok, true,
+    `the harness ran past the target's top-level code (${result.error})`);
+  assert.match(result.stdout, /returned: 42/);
   rmSync(root, { recursive: true, force: true });
 });
 
