@@ -67,7 +67,18 @@ function shortPath(file, cwd) {
  *   includeTests   keep *.test.js / *.spec  (default false)
  *   includeExternal draw edges to packages   (default false)
  */
-/** Node id for a shadowing local binding. */
+/**
+ * Node ids for functions and shadowing locals.
+ *
+ * The path is included, not just the basename: two `helper` functions in
+ * different files would otherwise share an id, which put them on top of each
+ * other in the layout and merged their edges. A basename is fine for a label,
+ * where a collision is invisible, and wrong for an identity, where it is not.
+ */
+export function functionNodeId(shortFile, name) {
+  return `f:${shortFile}::${name}`;
+}
+
 export function localNodeId(shortFile, name) {
   return `l:${shortFile}::${name}`;
 }
@@ -147,7 +158,7 @@ export function buildMap(target, options = {}) {
 
     for (const fn of scan.functions) {
       addNode({
-        id: `f:${short}::${fn.name}`,
+        id: functionNodeId(short, fn.name),
         kind: fn.kind === "class" ? "class" : "function",
         label: fn.name,
         file: short,
@@ -188,7 +199,7 @@ export function buildMap(target, options = {}) {
 
     // contains
     for (const fn of scan.functions) {
-      addEdge(modId, `f:${short}::${fn.name}`, "contains", EXTRACTED, fn.line);
+      addEdge(modId, functionNodeId(short, fn.name), "contains", EXTRACTED, fn.line);
     }
 
     // imports
@@ -240,7 +251,7 @@ export function buildMap(target, options = {}) {
       byName.get(fn.name).push({
         file,
         short,
-        node: `f:${short}::${fn.name}`,
+        node: functionNodeId(short, fn.name),
         exported: fn.exported,
         owner: fn.owner || null,
       });
@@ -276,7 +287,7 @@ export function buildMap(target, options = {}) {
 
     for (const call of scan.calls) {
       const fromId = call.from
-        ? `f:${short}::${call.from}`
+        ? functionNodeId(short, call.from)
         : modId; // a call at module top level
       const target = call.to;
       if (!target) continue;
@@ -299,7 +310,7 @@ export function buildMap(target, options = {}) {
 
       // 1. local, exact -- nothing else could be meant
       if (own.has(target)) {
-        addEdge(fromId, `f:${short}::${target}`, "calls", EXTRACTED, call.line);
+        addEdge(fromId, functionNodeId(short, target), "calls", EXTRACTED, call.line);
         continue;
       }
 
@@ -316,11 +327,11 @@ export function buildMap(target, options = {}) {
           }
           const matches = destScan.functions.filter((f) => f.name === dest.exported);
           if (matches.length) {
-            addEdge(fromId, `f:${destShort}::${dest.exported}`, "calls", EXTRACTED, call.line);
+            addEdge(fromId, functionNodeId(destShort, dest.exported), "calls", EXTRACTED, call.line);
           } else if (dest.exported === "default") {
             // default export whose local name may differ
             const def = destScan.functions.find((f) => f.exported && f.name === "default");
-            if (def) addEdge(fromId, `f:${destShort}::default`, "calls", EXTRACTED, call.line);
+            if (def) addEdge(fromId, functionNodeId(destShort, "default"), "calls", EXTRACTED, call.line);
             else addEdge(fromId, `m:${destShort}`, "calls-module", INFERRED, call.line);
           } else {
             addEdge(fromId, `m:${destShort}`, "calls-module", INFERRED, call.line);
@@ -341,7 +352,7 @@ export function buildMap(target, options = {}) {
             (f) => f.name === member || f.name.endsWith(`.${member}`),
           );
           if (match) {
-            addEdge(fromId, `f:${destShort}::${match.name}`, "calls", EXTRACTED, call.line);
+            addEdge(fromId, functionNodeId(destShort, match.name), "calls", EXTRACTED, call.line);
           } else {
             addEdge(fromId, `m:${destShort}`, "calls-module", INFERRED, call.line);
           }

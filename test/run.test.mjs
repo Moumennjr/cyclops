@@ -936,6 +936,89 @@ test("the map lays out every node without collisions", () => {
   assert.ok(bounds.width > 0 && bounds.height > 0, "the picture has a size");
 });
 
+test("a wide dependency row wraps instead of becoming one unreadable line", () => {
+  // 60 independent modules all sit at depth 0. Laid out in one row the map was
+  // 15,600px wide at 137:1 -- a 1920px screen showed 7 of them, and zooming out
+  // to see the rest made every label illegible.
+  const root = mkdtempSync(join(tmpdir(), "cyc-wide-"));
+  for (let i = 0; i < 60; i++) {
+    writeFileSync(join(root, `f${i}.js`), `export const x${i} = ${i};\n`);
+  }
+
+  const map = layoutMap(buildMap(root, { cwd: root }));
+  const bounds = mapBounds(map.nodes);
+  const aspect = bounds.width / bounds.height;
+
+  assert.ok(aspect < 12,
+    `aspect ${aspect.toFixed(1)}:1 is still a line, not a picture`);
+  assert.ok(new Set(map.nodes.map((n) => n.position.y)).size > 1,
+    "the row actually wrapped onto several lines");
+
+  const seen = new Map();
+  const collisions = [];
+  for (const n of map.nodes) {
+    const key = `${n.position.x},${n.position.y}`;
+    if (seen.has(key)) collisions.push(seen.get(key));
+    seen.set(key, n.label);
+  }
+  assert.deepEqual(collisions, [], "wrapping introduces no overlaps");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a map over the node cap is still laid out, not stacked in a corner", () => {
+  // Over the cap it used to return every node at {0,0}: 400 nodes on the same
+  // pixel reads as a broken viewer rather than a truncated map.
+  const root = mkdtempSync(join(tmpdir(), "cyc-cap2-"));
+  // One function per module, so the total is comfortably over the 400 cap.
+  for (let i = 0; i < 220; i++) {
+    writeFileSync(join(root, `m${i}.js`),
+      `export function fn${i}() { return ${i}; }\n`);
+  }
+
+  const map = layoutMap(buildMap(root, { cwd: root }));
+  assert.equal(map.truncated, true, "and it says so");
+  assert.match(map.truncationReason, /exceeds/, "with a reason naming the cap");
+  assert.match(map.truncationReason, /Narrow the target/,
+    "and how to get what was missed");
+  assert.equal(map.totalNodes, 440, "the true total (220 files + 220 functions) is reported");
+  assert.equal(map.nodes.length, 400, "exactly the cap is drawn");
+
+  const positions = new Set(map.nodes.map((n) => `${n.position.x},${n.position.y}`));
+  assert.equal(positions.size, 400, "every drawn node has its own position");
+
+  // An edge to a cut node must go with it -- React Flow errors on a dangling
+  // endpoint rather than ignoring it.
+  const ids = new Set(map.nodes.map((n) => n.id));
+  assert.ok(
+    map.edges.every((e) => ids.has(e.source) && ids.has(e.target)),
+    "no edge points at a node that was not drawn",
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("two same-named functions in different files do not collide", () => {
+  // Ids built from a bare filename gave every helper.js the same node id, so
+  // two helpers landed on one another and their edges merged.
+  const root = mkdtempSync(join(tmpdir(), "cyc-samename-"));
+  mkdirSync(join(root, "a"), { recursive: true });
+  mkdirSync(join(root, "b"), { recursive: true });
+  writeFileSync(join(root, "a", "helper.js"),
+    "export function helper() { return 1; }\nfunction go() { return helper(); }\ngo();\n");
+  writeFileSync(join(root, "b", "helper.js"),
+    "export function helper() { return 2; }\nfunction go() { return helper(); }\ngo();\n");
+
+  const map = buildMap(root, { cwd: root });
+  const helpers = map.nodes.filter((n) => n.label === "helper");
+  assert.equal(helpers.length, 2, "both helpers are separate nodes");
+  assert.equal(new Set(helpers.map((n) => n.id)).size, 2,
+    "with distinct ids, so their edges cannot merge");
+
+  const laid = layoutMap(map);
+  const positions = new Set(laid.nodes.map((n) => `${n.position.x},${n.position.y}`));
+  assert.equal(positions.size, laid.nodes.length, "and they do not overlap");
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("map analysis separates load-bearing code from the rest", () => {
   const map = buildMap("src");
   const a = analyzeMap(map);

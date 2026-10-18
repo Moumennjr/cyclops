@@ -42,37 +42,42 @@ export function layoutMap(map, options = {}) {
     roots = null,
   } = options;
 
-  const nodes = map.nodes || [];
+  const allNodes = map.nodes || [];
   const edges = map.edges || [];
 
-  if (nodes.length > MAX_NODES) {
-    return {
-      ...map,
-      nodes: nodes.slice(0, MAX_NODES).map((n) => ({
-        ...n,
-        position: { x: 0, y: 0 },
-      })),
-      truncated: true,
-      truncationReason:
-        `${map.nodes.length} nodes exceeds the ${MAX_NODES} a readable map can hold; ` +
-        `narrow the target.`,
-    };
-  }
+  // Over the cap: the map is still drawn, but only the first MAX_NODES are.
+  //
+  // They used to be returned with every position at {0,0}, which stacked all
+  // 400 of them in the corner -- a viewer full of overlapping nodes reads as a
+  // broken map rather than a truncated one. Laying them out instead means the
+  // drawn map is genuinely the first 400, and the notice says what is missing.
+  const overCap = allNodes.length > MAX_NODES;
+  const visible = overCap ? allNodes.slice(0, MAX_NODES) : allNodes;
+  const truncationReason = overCap
+    ? `${allNodes.length} nodes exceeds the ${MAX_NODES} a readable map can hold; ` +
+      `showing the first ${MAX_NODES}. Narrow the target with --tests off, ` +
+      `--external off, or a smaller path.`
+    : null;
 
   // Only dependency edges position anything. A `contains` edge is a
   // file-to-function relation, not a data-flow one, and laying modules out by
   // "which of my functions does this import" is meaningless.
+  const keptIds = new Set(visible.map((n) => n.id));
+
   const flowEdges = edges.filter(
     (e) => e.relation === "imports" || e.relation === "calls" ||
       e.relation === "calls-module",
   );
 
+  const nodes = visible;
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const outgoing = new Map();
   const incoming = new Map();
   for (const n of nodes) { outgoing.set(n.id, []); incoming.set(n.id, []); }
   for (const e of flowEdges) {
-    if (!byId.has(e.source) || !byId.has(e.target)) continue;
+    // An edge to a node that was cut is dropped with it: React Flow errors on a
+    // dangling endpoint rather than ignoring it.
+    if (!keptIds.has(e.source) || !keptIds.has(e.target)) continue;
     outgoing.get(e.source).push(e.target);
     incoming.get(e.target).push(e.source);
   }
@@ -150,17 +155,48 @@ export function layoutMap(map, options = {}) {
   }
 
   const placed = new Map();
-  let x = 0;
-  for (const [d, row] of [...rows.entries()].sort((a, b) => a[0] - b[0])) {
-    let cursor = x;
-    for (const n of row) {
-      if (n.kind !== "module") continue;
-      placed.set(n.id, { x: cursor, y: d * level });
-      cursor += width + hGap;
+
+  // A row wider than this many columns wraps onto another band.
+  //
+  // A dependency graph's widest layer is its source layer, and putting every
+  // entry point in one line produced a map 15,600px wide at 137:1 -- a 1920px
+  // screen showed 7 of 60 modules, and zooming out to see the rest made every
+  // label illegible. A row you cannot take in at once is not a readable row,
+  // however technically correct.
+  //
+  // 14 columns is roughly one and a half screens of modules at default zoom,
+  // which is the most a person reliably scans before losing their place.
+  const MAX_COLUMNS = Number(globalThis.CYCLOPS_MAP_COLUMNS) || 14;
+
+  /** Splits a row into bands of at most MAX_COLUMNS, modules first. */
+  const bandRow = (row) => {
+    const bands = [];
+    for (let i = 0; i < row.length; i += MAX_COLUMNS) {
+      bands.push(row.slice(i, i + MAX_COLUMNS));
     }
-    // Only modules advance the cursor; external/other nodes in the row are
-    // placed relative to their module below.
-    if (cursor > x) x = cursor;
+    return bands;
+  };
+
+  // How many bands each depth needed, so the next depth starts below all of
+  // them rather than overlapping the last one.
+  const bandsPerDepth = new Map();
+  let bandWidth = 0;
+  // Cursor past the rightmost placed module, for anything with no owner of its
+  // own to sit to the right of.
+  let orphanCursor = 0;
+
+  for (const [d, row] of [...rows.entries()].sort((a, b) => a[0] - b[0])) {
+    const bands = bandRow(row);
+    bandsPerDepth.set(d, bands.length);
+    bands.forEach((band, bi) => {
+      let cursor = 0;
+      for (const n of band.filter((n) => n.kind === "module")) {
+        placed.set(n.id, { x: cursor, y: (d + bi) * level });
+        cursor += width + hGap;
+      }
+      // Record how wide this band is so the wrap below can bound the picture.
+      if (cursor > bandWidth) bandWidth = cursor;
+    });
   }
 
   // Stack each module's contents beneath it.
@@ -172,11 +208,23 @@ export function layoutMap(map, options = {}) {
       continue; // placed in one band at the end, once the columns are known
     }
     const owner = ownerOf.get(n.id);
-    const base = owner ? placed.get(owner) : null;
+    // A `local` node records the *name* of the function it belongs to, not a
+    // node id, so it has to be matched by name. Treating that as an id left it
+    // with no base and it took the shared orphan cursor -- which is how two
+    // "renderDiff (local)" nodes in different files landed on the same spot.
+    const ownerNode = n.kind === "local" && n.owner
+      ? nodes.find((m) => m.kind !== "module" && m.label === n.owner)
+      : null;
+    const base = (owner && placed.get(owner)) || (ownerNode && placed.get(ownerNode.id)) || null;
     if (!base) {
       // No owner (or the owner is an external): its own column at the end, with
       // room to grow downward rather than a shared slot everyone collides in.
-      placed.set(n.id, { x: x, y: orphanRow++ * fnHeight });
+      placed.set(n.id, {
+        x: orphanCursor % 12 * (width + hGap),
+        y: orphanRow * fnHeight,
+      });
+      orphanCursor++;
+      if (orphanCursor % 12 === 0) orphanRow++;
       continue;
     }
     const siblings = nodes.filter(
@@ -199,36 +247,45 @@ export function layoutMap(map, options = {}) {
   // their owner above, and moving the owner afterwards would leave them
   // detached -- which is exactly the bug that produced a map where every
   // function floated at the origin.
-  const maxD = Math.max(0, ...[...rows.keys()]);
-  const maxRow = () => (maxD + 1) * level;
+  // The deepest *band* index, not the deepest depth: a wrapped row occupies
+  // several, and anything placed below must clear all of them.
+  const maxBand = Math.max(
+    0,
+    ...[...bandsPerDepth.entries()].map(([d, n]) => d + n - 1),
+  );
+  const maxRow = () => (maxBand + 1) * level;
 
   for (const [d, row] of [...rows.entries()].sort((a, b) => a[0] - b[0])) {
-    const mods = row.filter((n) => n.kind === "module");
-    if (mods.length < 2) continue;
+    // Centre per band, not per depth: a wrapped depth is several independent
+    // rows and centring them together would undo the wrap.
+    for (const band of bandRow(row)) {
+      const mods = band.filter((n) => n.kind === "module");
+      if (mods.length < 2) continue;
 
-    const sources = [];
-    for (const n of mods) {
-      for (const src of incoming.get(n.id) || []) {
-        const p = placed.get(src);
-        if (p && Math.round(p.y / level) < d) sources.push(p.x);
+      const sources = [];
+      for (const n of mods) {
+        for (const src of incoming.get(n.id) || []) {
+          const p = placed.get(src);
+          if (p && p.y < placed.get(n.id).y) sources.push(p.x);
+        }
       }
-    }
-    if (!sources.length) continue;
+      if (!sources.length) continue;
 
-    const first = placed.get(mods[0].id).x;
-    const last = placed.get(mods[mods.length - 1].id).x + width;
-    const want = (Math.min(...sources) + Math.max(...sources) + width) / 2;
-    const shift = want - (first + last) / 2;
+      const first = Math.min(...mods.map((n) => placed.get(n.id).x));
+      const last = Math.max(...mods.map((n) => placed.get(n.id).x)) + width;
+      const want = (Math.min(...sources) + Math.max(...sources) + width) / 2;
+      const shift = want - (first + last) / 2;
 
-    for (const n of mods) {
-      const p = placed.get(n.id);
-      placed.set(n.id, { x: p.x + shift, y: p.y });
-      // Everything stacked under this module moves with it.
-      for (const child of nodes) {
-        if (child.kind === "module" || child.kind === "external") continue;
-        if (ownerOf.get(child.id) !== n.id) continue;
-        const cp = placed.get(child.id);
-        placed.set(child.id, { x: cp.x + shift, y: cp.y });
+      for (const n of mods) {
+        const p = placed.get(n.id);
+        placed.set(n.id, { x: p.x + shift, y: p.y });
+        // Everything stacked under this module moves with it.
+        for (const child of nodes) {
+          if (child.kind === "module" || child.kind === "external") continue;
+          if (ownerOf.get(child.id) !== n.id) continue;
+          const cp = placed.get(child.id);
+          placed.set(child.id, { x: cp.x + shift, y: cp.y });
+        }
       }
     }
   }
@@ -236,14 +293,18 @@ export function layoutMap(map, options = {}) {
   // Externals last, in their own band: they are context, not structure, and
   // placing them alongside the project's own modules makes the dependency
   // picture harder to read rather than easier.
-  let ex = 0;
+  // Externals and orphans share the area below the map, so they get one
+  // cursor between them rather than each starting at column 0 -- which is how
+  // a 400-node map ended up with 399 collisions.
+  let tail = 0;
+  let tailY = maxRow(level);
   for (const n of nodes) {
     if (n.kind !== "external") continue;
     placed.set(n.id, {
-      x: (ex % 12) * (width + hGap),
-      y: maxRow(level) + Math.floor(ex / 12) * 56,
+      x: (tail % 12) * (width + hGap),
+      y: tailY + Math.floor(tail / 12) * 56,
     });
-    ex++;
+    tail++;
   }
 
   const out = nodes.map((n) => {
@@ -252,7 +313,8 @@ export function layoutMap(map, options = {}) {
   });
 
   // Edges in the shape the viewer already draws: source/target plus handles.
-  const outEdges = edges.map((e, i) => ({
+  const outEdges = edges.filter((e) => keptIds.has(e.source) && keptIds.has(e.target))
+    .map((e, i) => ({
     id: `e${i}`,
     source: e.source,
     target: e.target,
@@ -263,7 +325,14 @@ export function layoutMap(map, options = {}) {
     animated: false,
   }));
 
-  return { ...map, nodes: out, edges: outEdges, truncated: false };
+  return {
+    ...map,
+    nodes: out,
+    edges: outEdges,
+    truncated: overCap,
+    truncationReason,
+    totalNodes: allNodes.length,
+  };
 }
 
 // Visual encoding for an edge, by what it asserts.
