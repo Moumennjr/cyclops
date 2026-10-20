@@ -517,6 +517,9 @@ async function mapMain(argv) {
 
   const outFile = opts.outFile ? resolve(cwd, opts.outFile) : join(cwd, "out", "map.json");
   mkdirSync(dirname(outFile), { recursive: true });
+  // Stamp the build time so a reader can tell whether the map still describes
+  // the project (src/map.js: mapStaleness).
+  map.generatedAt = new Date().toISOString();
   writeFileSync(outFile, JSON.stringify(map, null, 2));
 
   if (opts.format === "edges") {

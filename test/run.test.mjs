@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   readFileSync,
   writeFileSync,
+  utimesSync,
   mkdtempSync,
   rmSync,
   existsSync,
@@ -38,7 +39,7 @@ import {
 import { snapshot } from "../src/snapshot.js";
 import { watchTrace } from "../src/watch.js";
 import { trace } from "../src/engine.js";
-import { buildMap } from "../src/map.js";
+import { buildMap, mapStaleness } from "../src/map.js";
 import { layoutMap, mapBounds } from "../src/maplayout.js";
 import { analyzeMap, renderMapReport, findCycles } from "../src/mapanalyze.js";
 import { scanFile } from "../src/scan.js";
@@ -909,6 +910,79 @@ test("a plain module-level call is not mistaken for a shadow", () => {
     "EXTRACTED",
     "and a sibling function call is not either",
   );
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("map staleness separates a current map from a stale one", () => {
+  // A map is a photograph. Without a timestamp it is a photograph nobody can
+  // date, and the viewer will present a picture of a rewritten project as if
+  // it were current.
+  const root = mkdtempSync(join(tmpdir(), "cyc-stale-"));
+  writeFileSync(join(root, "a.js"), "export function a() { return 1; }\n");
+  writeFileSync(join(root, "b.js"), "export function b() { return 2; }\n");
+
+  const map = buildMap(root, { cwd: root });
+  map.generatedAt = new Date().toISOString();
+
+  // Fresh: nothing has changed since the stamp.
+  const fresh = mapStaleness(map);
+  assert.equal(fresh.stale, false);
+  assert.equal(fresh.checked, 2);
+
+  // Edit one file into the future; now the map is stale, and it says which.
+  const later = new Date(Date.now() + 3600e3);
+  utimesSync(join(root, "a.js"), later, later);
+  const stale = mapStaleness(map);
+  assert.equal(stale.stale, true, "a newer file makes the map stale");
+  assert.deepEqual(stale.changed, ["a.js"], "and names it");
+  assert.equal(stale.changedCount, 1);
+
+  // A deleted file also counts: a map describing a file that is not there is
+  // more wrong than one describing an old file.
+  rmSync(join(root, "b.js"));
+  const gone = mapStaleness(map);
+  assert.equal(gone.stale, true);
+  assert.ok(gone.changed.includes("b.js"), "deletion counts as change");
+
+  // A map built before the check existed is not reported as current -- it is
+  // reported as unchecked.
+  const legacy = { ...map };
+  delete legacy.generatedAt;
+  const note = mapStaleness(legacy);
+  assert.equal(note.stale, false);
+  assert.match(note.note, /predates/, "and says why it could not check");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("the server attaches staleness without moving the map's fields", async () => {
+  // The banner must not cost anyone their layout: staleness is attached beside
+  // nodes/edges/files, never in place of them.
+  const root = mkdtempSync(join(tmpdir(), "cyc-stale2-"));
+  writeFileSync(join(root, "a.js"), "export function a() { return 1; }\n");
+  const built = buildMap(root, { cwd: root });
+  built.generatedAt = new Date().toISOString();
+  const mapFile = join(root, "map.json");
+  writeFileSync(mapFile, JSON.stringify(layoutMap(built)));
+
+  const { url, close } = await startServer({ port: 4761, mapPath: mapFile });
+  try {
+    const body = await (await fetch(url + "/map.json")).json();
+    assert.ok(Array.isArray(body.nodes), "nodes are still where they were");
+    assert.ok(Array.isArray(body.edges), "so are edges");
+    assert.equal(body.staleness.stale, false, "and the map reads as current");
+
+    const later = new Date(Date.now() + 3600e3);
+    utimesSync(join(root, "a.js"), later, later);
+    const staleBody = await (await fetch(url + "/map.json")).json();
+    assert.equal(staleBody.staleness.stale, true);
+    assert.equal(staleBody.staleness.changedCount, 1);
+    assert.ok(staleBody.nodes.length > 0, "the map itself is untouched");
+
+    const text = await (await fetch(url + "/map.txt")).text();
+    assert.match(text, /map is stale: 1 of 1/, "the text view says so too");
+  } finally {
+    await close();
+  }
   rmSync(root, { recursive: true, force: true });
 });
 

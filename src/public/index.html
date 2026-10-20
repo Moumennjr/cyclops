@@ -507,6 +507,25 @@
         backdrop-filter: blur(3px);
       }
       .cyc-mapbar label { display: inline-flex; align-items: center; gap: 4px; }
+      .cyc-mapstale {
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        max-width: min(92%, 720px);
+        padding: 7px 12px;
+        border-radius: 9px;
+        background: rgb(255 251 245 / 0.97);
+        border: 1px solid #fcd34d;
+        box-shadow: 0 4px 14px rgb(15 23 42 / 0.1);
+        font-size: 12px;
+        color: #78350f;
+        backdrop-filter: blur(3px);
+      }
       .cyc-mapstat { color: #64748b; font-variant-numeric: tabular-nums; }
       .cyc-mapwarn {
         color: #92400e;

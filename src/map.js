@@ -22,7 +22,8 @@
 import { scanFile, EXTRACTED, INFERRED, AMBIGUOUS } from "./scan.js";
 import { resolveTargets, isTraceable } from "./targets.js";
 import { resolveLocal } from "./graph.js";
-import { basename, dirname, relative, resolve, sep } from "node:path";
+import { statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Call targets that are built-ins or language features. They are never edges:
 // `String(x)` is not a fact about this codebase, and including it would put a
@@ -75,6 +76,61 @@ function shortPath(file, cwd) {
  * other in the layout and merged their edges. A basename is fine for a label,
  * where a collision is invisible, and wrong for an identity, where it is not.
  */
+/**
+ * Asks whether a built map still matches the files it was built from.
+ *
+ * A map is a photograph, and photographs go stale. The viewer will happily show
+ * a map of a project that has since been rewritten, with no indication that the
+ * edges no longer correspond to any line of code. This compares each source
+ * file's modification time against the map's own build time.
+ *
+ * Returns { stale, checked, changed, note }:
+ *   stale    -- at least one source file is newer than the map
+ *   checked  -- how many files were stat()ed
+ *   changed  -- which ones, first 10, so the reader can look
+ *
+ * A file that has been *deleted* counts as changed: a map claiming to describe
+ * a file that is not there is more wrong than one describing an old file.
+ *
+ * Caveat, honestly: this is mtime-based. A file rewritten within the same
+ * filesystem timestamp tick as the map build is invisible to it, and a file
+ * touched without changing its contents counts as stale. The first is a rare
+ * false negative, the second a harmless false positive; neither is worth
+ * hashing the whole tree to avoid.
+ */
+export function mapStaleness(map, options = {}) {
+  const cwd = options.cwd ?? map?.cwd ?? process.cwd();
+  const files = Array.isArray(map?.files) ? map.files : [];
+  if (!map?.generatedAt || !files.length) {
+    return {
+      stale: false,
+      checked: 0,
+      changed: [],
+      note: map?.generatedAt ? null : "this map predates the staleness check",
+    };
+  }
+  const builtAt = Date.parse(map.generatedAt);
+  if (Number.isNaN(builtAt)) {
+    return { stale: false, checked: 0, changed: [], note: "unparseable build time" };
+  }
+  const changed = [];
+  for (const rel of files) {
+    const abs = isAbsolute(rel) ? rel : join(cwd, rel);
+    try {
+      if (statSync(abs).mtimeMs > builtAt) changed.push(rel);
+    } catch {
+      // Gone counts as changed -- see above.
+      changed.push(rel);
+    }
+  }
+  return {
+    stale: changed.length > 0,
+    checked: files.length,
+    changed: changed.slice(0, 10),
+    changedCount: changed.length,
+  };
+}
+
 export function functionNodeId(shortFile, name) {
   return `f:${shortFile}::${name}`;
 }

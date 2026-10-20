@@ -8,6 +8,7 @@ import { flattenForEditor } from "./editor.js";
 import { summarize, findFrames, stats, errorReport } from "./analyze.js";
 import { renderMap, renderMapFlat } from "./maplayout.js";
 import { renderMapReport } from "./mapanalyze.js";
+import { mapStaleness } from "./map.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DIST = join(here, "..", "dist");
@@ -184,6 +185,14 @@ export async function startServer({
     // The static project map: what the codebase looks like, without running it.
     if (pathname === "/map.json") {
       const map = readJsonFile(mapFile);
+      // A map can be perfectly well-formed and describe a project that no longer
+      // exists. The staleness check answers "does this still match the code?"
+      // without rebuilding, so the viewer can say so instead of presenting a
+      // stale picture as current. It is attached, not substituted: every field
+      // the viewer already reads stays where it is.
+      if (map.status === "ok") {
+        map.data.staleness = mapStaleness(map.data);
+      }
       return send(
         res, artifactStatus(map), artifactBody(map, "map", "run: cyclops map ."),
         { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
@@ -286,12 +295,18 @@ export async function startServer({
       const mapData = map.data;
       const params = new URL(req.url, "http://localhost").searchParams;
       const focus = params.get("focus");
+      const staleness = mapStaleness(mapData);
+      const staleNote = staleness.stale
+        ? `\n[map is stale: ${staleness.changedCount} of ${staleness.checked} ` +
+          `source file(s) changed since it was built; re-run: cyclops map ${mapData.target ?? "."}]`
+        : "";
       const body =
-        pathname === "/map.txt"
+        (pathname === "/map.txt"
           ? renderMap(mapData)
           : pathname === "/map.edges"
             ? renderMapFlat(mapData)
-            : renderMapReport(mapData, { title: focus ? `focus: ${focus}` : null });
+            : renderMapReport(mapData, { title: focus ? `focus: ${focus}` : null })) +
+        staleNote;
       return send(res, 200, body, {
         "content-type": "text/plain; charset=utf-8",
         "cache-control": "no-store",

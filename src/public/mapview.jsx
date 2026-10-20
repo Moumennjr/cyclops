@@ -461,6 +461,22 @@ export default function ProjectMap() {
           }}
         />
 
+        {map.staleness?.stale && (
+          <div className="cyc-mapstale" role="status">
+            <span className="cyc-mapwarn">
+              map is stale
+            </span>
+            <span>
+              {map.staleness.changedCount} of {map.staleness.checked} source
+              file(s) changed since it was built
+              {map.staleness.changed?.length
+                ? ` — e.g. ${map.staleness.changed.slice(0, 3).join(", ")}`
+                : ""}
+              . These edges may describe code that no longer exists.
+            </span>
+          </div>
+        )}
+
         <div className="cyc-mapbar">
           <span className="cyc-mapstat">
             {counts.module || 0} modules · {counts.function || 0} functions
