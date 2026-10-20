@@ -22,7 +22,7 @@
 import { scanFile, EXTRACTED, INFERRED, AMBIGUOUS } from "./scan.js";
 import { resolveTargets, isTraceable } from "./targets.js";
 import { resolveLocal } from "./graph.js";
-import { statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Call targets that are built-ins or language features. They are never edges:
@@ -131,6 +131,71 @@ export function mapStaleness(map, options = {}) {
   };
 }
 
+/**
+ * Cache of per-file scan results, keyed by absolute path + (mtime, size).
+ *
+ * Scanning is the expensive part of building a map -- every file is parsed --
+ * and on a large project most files have not changed since the last run. The
+ * cache stores each file's scan keyed by the same identity the operating system
+ * uses for "has this file changed": its modification time and its size.
+ *
+ * Honesty rules, in the order they matter:
+ *
+ *   1. A version bump throws the whole cache away. Scan results are an
+ *      internal format; a half-understood old shape would corrupt maps in
+ *      ways nobody would trace back to a cache file.
+ *   2. A corrupt cache file is discarded, not repaired. Repairing a cache
+ *      means guessing what the writer meant, and a wrong guess maps wrong.
+ *   3. Any stat or read failure is a miss, never a hit. The failure mode is
+ *      "rescan", which is always safe.
+ *   4. The mtime/size pair has a known blind spot: a rewrite within the same
+ *      filesystem timestamp tick, to the same size, is invisible. This is the
+ *      same tradeoff git's index makes, and for the same reason.
+ */
+const SCAN_CACHE_VERSION = 1;
+
+function loadScanCache(cacheFile, stats) {
+  let raw;
+  try {
+    raw = readFileSync(cacheFile, "utf8");
+  } catch {
+    return new Map(); // no cache yet: a miss, not an error
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== SCAN_CACHE_VERSION || typeof parsed.files !== "object") {
+      stats.discarded = "version or shape changed";
+      return new Map();
+    }
+    const entries = new Map();
+    for (const [abs, entry] of Object.entries(parsed.files || {})) {
+      if (entry && typeof entry.mtimeMs === "number" && entry.scan) {
+        entries.set(abs, entry);
+      }
+    }
+    return entries;
+  } catch (e) {
+    stats.discarded = e.message;
+    return new Map();
+  }
+}
+
+function saveScanCache(cacheFile, entries) {
+  try {
+    mkdirSync(dirname(cacheFile), { recursive: true });
+    const files = {};
+    for (const [abs, entry] of entries) files[abs] = entry;
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({ version: SCAN_CACHE_VERSION, files }),
+    );
+    return true;
+  } catch {
+    // A cache that cannot be written is not a reason to fail the build.
+    return false;
+  }
+}
+
 export function functionNodeId(shortFile, name) {
   return `f:${shortFile}::${name}`;
 }
@@ -149,6 +214,9 @@ export function buildMap(target, options = {}) {
     maxFiles = 500,
     includeTests = false,
     includeExternal = false,
+    // null disables the cache; a string is the cache file's path; true means
+    // the default location for this cwd.
+    cache = null,
   } = options;
 
   const cwd = resolve(requestedCwd);
@@ -174,13 +242,44 @@ export function buildMap(target, options = {}) {
 
   const scans = new Map();
   const skipped = [];
+  const cacheFile = cache === true ? join(cwd, "out", "map.scans.json") : cache;
+  const cacheStats = {
+    enabled: Boolean(cacheFile),
+    hits: 0,
+    misses: 0,
+    discarded: null,
+  };
+  const cacheEntries = cacheFile ? loadScanCache(cacheFile, cacheStats) : new Map();
+
   for (const file of all.slice(0, maxFiles)) {
+    let st = null;
+    try {
+      st = statSync(file);
+    } catch {
+      // Vanished between planning and scanning; scanFile will report it and it
+      // lands in skipped. No cache consult, no cache write.
+    }
+    const entry = st ? cacheEntries.get(file) : null;
+    if (entry && entry.mtimeMs === st.mtimeMs && entry.size === st.size) {
+      scans.set(file, entry.scan);
+      cacheStats.hits++;
+      continue;
+    }
+    cacheStats.misses++;
     const scan = scanFile(file);
     if (scan.error) {
       skipped.push({ file, reason: scan.error });
+      cacheEntries.delete(file); // do not keep a broken file's last good scan
       continue;
     }
     scans.set(file, scan);
+    if (st) {
+      cacheEntries.set(file, { mtimeMs: st.mtimeMs, size: st.size, scan });
+    }
+  }
+
+  if (cacheFile) {
+    cacheStats.saved = saveScanCache(cacheFile, cacheEntries);
   }
 
   // ---- nodes --------------------------------------------------------------
@@ -323,7 +422,7 @@ export function buildMap(target, options = {}) {
   const importBindings = new Map(); // file -> Map(localName -> {file, exported})
   for (const [file, scan] of scans) {
     const bindings = new Map();
-    for (const [local, info] of scan.importedBindings) {
+    for (const [local, info] of Object.entries(scan.importedBindings || {})) {
       const target = resolveLocal(info.source, file);
       if (target) {
         bindings.set(local, { file: resolve(target), exported: info.exported });
@@ -434,6 +533,7 @@ export function buildMap(target, options = {}) {
   }
 
   return {
+    cache: cacheStats,
     error: null,
     cwd,
     target,

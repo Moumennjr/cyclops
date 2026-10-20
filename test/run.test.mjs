@@ -913,6 +913,63 @@ test("a plain module-level call is not mistaken for a shadow", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("the scan cache re-runs only what changed, and never lies about it", () => {
+  // Scanning parses every file; on a large project most have not changed. The
+  // cache must make the second run cheap *and* produce the identical map --
+  // a cache that saves time by quietly describing yesterday's codebase is worse
+  // than no cache at all.
+  const root = mkdtempSync(join(tmpdir(), "cyc-scan-cache-"));
+  for (let i = 0; i < 8; i++) {
+    writeFileSync(join(root, `f${i}.js`),
+      `import { x } from "./dep.js";\nexport function f${i}() { return x; }\n`);
+  }
+  writeFileSync(join(root, "dep.js"), "export const x = 1;\n");
+  const cacheFile = join(root, "scans.json");
+
+  // Cold: everything is a miss, and the cache is written.
+  const cold = buildMap(root, { cwd: root, cache: cacheFile });
+  assert.equal(cold.cache.enabled, true);
+  assert.equal(cold.cache.hits, 0);
+  assert.equal(cold.cache.misses, 9);
+
+  // Warm: everything is a hit, and the map is byte-identical.
+  const warm = buildMap(root, { cwd: root, cache: cacheFile });
+  assert.equal(warm.cache.hits, 9, "no file is parsed twice");
+  assert.equal(warm.cache.misses, 0);
+  delete cold.cache;
+  delete warm.cache;
+  assert.deepEqual(warm, cold, "a cached map is the same map");
+
+  // One edit invalidates one file, and only that file.
+  const later = new Date(Date.now() + 3600e3);
+  writeFileSync(join(root, "f3.js"),
+    `import { x } from "./dep.js";\nexport function f3() { return x + 1; }\n`);
+  utimesSync(join(root, "f3.js"), later, later);
+  const edited = buildMap(root, { cwd: root, cache: cacheFile });
+  assert.equal(edited.cache.hits, 8, "only the edited file is rescanned");
+  assert.equal(edited.cache.misses, 1);
+
+  // A corrupt cache is discarded, reported, and produces a correct map --
+  // never a crash and never a half-read one.
+  writeFileSync(cacheFile, "{not json");
+  const corrupt = buildMap(root, { cwd: root, cache: cacheFile });
+  assert.ok(corrupt.cache.discarded, "and it says why it was thrown away");
+  assert.equal(corrupt.cache.hits, 0);
+  assert.equal(corrupt.cache.misses, 9);
+  assert.equal(corrupt.nodes.length, edited.nodes.length,
+    "the map is complete despite the cache being useless");
+
+  // A version bump is the same story as corruption: discard, do not interpret.
+  writeFileSync(cacheFile, JSON.stringify({ version: 0, files: {} }));
+  const old = buildMap(root, { cwd: root, cache: cacheFile });
+  assert.match(old.cache.discarded, /version/);
+
+  // Default: no cache at all, so nothing reads or writes a file.
+  const plain = buildMap(root, { cwd: root });
+  assert.equal(plain.cache.enabled, false);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("--json prints the map document itself, on stdout only", async () => {
   // For piping into jq, a dashboard, a CI gate. The point is that stdout is
   // *only* the document -- one stray banner line and JSON.parse explodes in a

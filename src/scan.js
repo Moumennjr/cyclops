@@ -635,7 +635,10 @@ function kindOf(fn) {
     imports,
     reexports,
     exports: [...new Set(exportsOut)],
-    importedBindings: imported,
+    // A plain object, not the Map used internally: scan results are stored in
+    // the map cache as JSON, and a Map survives that round-trip as an empty
+    // object -- every imported binding silently gone on the next cached run.
+    importedBindings: Object.fromEntries(imported),
     functions,
     calls,
     locals,

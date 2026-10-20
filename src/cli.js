@@ -105,6 +105,7 @@ function parseMapArgs(argv) {
   let includeExternal = false;
   let outFile = null;
   let maxFiles = 500;
+  let noCache = false;
   let help = false;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
@@ -118,6 +119,7 @@ function parseMapArgs(argv) {
     else if (a === "--external") includeExternal = true;
     else if (a === "--max-files") maxFiles = Number(rest[++i]) || 500;
     else if (a === "--out") outFile = rest[++i] || null;
+    else if (a === "--no-cache") noCache = true;
     else if (a === "--port") port = Number(rest[++i]) || null;
     else if (a === "--help" || a === "-h") help = true;
     else if (!a.startsWith("-")) files.push(a);
@@ -128,7 +130,7 @@ function parseMapArgs(argv) {
   }
   return {
     files, format, open, noServer, port,
-    includeTests, includeExternal, outFile, maxFiles, help,
+    includeTests, includeExternal, outFile, maxFiles, noCache, help,
   };
 }
 
@@ -149,6 +151,7 @@ function printMapUsage() {
     --tests           include test files (excluded by default)
     --external        draw external packages as nodes too
     --max-files <n>   stop scanning after n files (default 500)
+    --no-cache        rescan every file; do not read or write the scan cache
     --port N          viewer port (default 4600)`);
 }
 
@@ -504,20 +507,36 @@ async function mapMain(argv) {
   const { renderMapReport } = await import("./mapanalyze.js");
   const { renderMap, renderMapFlat } = await import("./maplayout.js");
 
+  // The output path is needed before the build, because the scan cache lives
+  // beside the map it serves.
+  const outFile = opts.outFile ? resolve(cwd, opts.outFile) : join(cwd, "out", "map.json");
+
   let map = buildMap(target, {
     cwd,
     maxFiles: opts.maxFiles,
     includeTests: opts.includeTests,
     includeExternal: opts.includeExternal,
+    // Scanning is the expensive part and most files have not changed since the
+    // last run. src/map.js holds the invalidation rules: mtime+size identity,
+    // a version bump discards everything, a corrupt cache discards everything.
+    cache: opts.noCache ? null : join(dirname(outFile), "map.scans.json"),
   });
   if (map.error) {
     console.error(map.error);
     process.exit(1);
   }
+  if (map.cache?.enabled) {
+    const { hits, misses, discarded, saved } = map.cache;
+    console.error(
+      discarded
+        ? `[cyclops] scan cache discarded (${discarded}); rescanned ${misses} file(s)`
+        : `[cyclops] scan cache: ${hits} hit(s), ${misses} miss(es)` +
+          (saved === false ? ", could not write cache" : ""),
+    );
+  }
 
   map = layoutMap(map);
 
-  const outFile = opts.outFile ? resolve(cwd, opts.outFile) : join(cwd, "out", "map.json");
   mkdirSync(dirname(outFile), { recursive: true });
   // Stamp the build time so a reader can tell whether the map still describes
   // the project (src/map.js: mapStaleness).
