@@ -52,6 +52,13 @@ mapButton.addEventListener("click", () => setMode("map"));
     const res = await fetch("/whoami");
     if (!res.ok) return;
     const info = await res.json();
+    // A broken map still gets its tab: the map view reports the damage and what
+    // to do about it, which is more useful than a disabled button. Only a
+    // genuinely absent map hides the tab.
+    if (info && info.mapStatus === "broken") {
+      mapButton.title = "out/map.json exists but does not parse";
+      return;
+    }
     if (!info || !info.mapPath) {
       mapButton.disabled = true;
       mapButton.title = "No map yet — run: cyclops map .";

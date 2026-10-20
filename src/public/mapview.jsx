@@ -34,24 +34,44 @@ import {
 // Data
 // ---------------------------------------------------------------------------
 
-/** Fetches the map, reporting absence rather than pretending it is empty. */
+/**
+ * Fetches the map.
+ *
+ * `status` is one of loading | live | absent | broken, and the last two are
+ * kept apart on purpose. "Absent" means nobody has run `cyclops map`, and the
+ * fix is to run it. "Broken" means the file is there and does not parse -- a
+ * half-written map, a merge conflict -- and the fix is to look at it before
+ * overwriting. Telling someone to re-run the command in that second case
+ * destroys the evidence.
+ */
 export function useMap() {
   const [map, setMap] = useState(null);
   const [status, setStatus] = useState("loading");
+  const [detail, setDetail] = useState(null);
 
   const reload = useCallback(async () => {
     try {
       const res = await fetch("/map.json");
       if (res.status === 404) {
         setMap(null);
-        setStatus("no map — run: cyclops map .");
+        let body = null;
+        try { body = await res.json(); } catch { /* not json */ }
+        if (body?.error === "the map is unreadable") {
+          setStatus("broken");
+          setDetail(body.detail || "unreadable");
+        } else {
+          setStatus("absent");
+          setDetail(null);
+        }
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setMap(await res.json());
       setStatus("live");
+      setDetail(null);
     } catch (e) {
-      setStatus(`map failed: ${e.message}`);
+      setStatus("broken");
+      setDetail(e.message);
     }
   }, []);
 
@@ -62,7 +82,7 @@ export function useMap() {
     // noise; the button re-fetches on demand instead.
   }, [reload]);
 
-  return { map, status, reload };
+  return { map, status, detail, reload };
 }
 
 // ---------------------------------------------------------------------------
@@ -321,7 +341,7 @@ function MapDetail({ node, map, onFocus, onClose, onTrace }) {
 // ---------------------------------------------------------------------------
 
 export default function ProjectMap() {
-  const { map, status, reload } = useMap();
+  const { map, status, detail, reload } = useMap();
   const [selected, setSelected] = useState(null);
   const [focus, setFocus] = useState(null);
   const [showFunctions, setShowFunctions] = useState(true);
@@ -368,12 +388,31 @@ export default function ProjectMap() {
   }, []);
 
   if (!map) {
+    const broken = status === "broken";
     return (
       <div className="cyc-mapempty">
-        <h2>No map yet</h2>
-        <p>
-          Run <code>cyclops map .</code> to read this project without running it.
-        </p>
+        <h2>{broken ? "The map is unreadable" : "No map yet"}</h2>
+        {broken ? (
+          <>
+            <p>
+              <code>out/map.json</code> exists but does not parse
+              {detail ? <> — {detail}</> : null}.
+            </p>
+            <p>
+              That is different from never having run it. Look at the file
+              before overwriting it: a truncated or half-written map may still
+              say something worth knowing.
+            </p>
+            <p className="cyc-mapstatus">
+              Re-running <code>cyclops map .</code> will replace it.
+            </p>
+          </>
+        ) : (
+          <p>
+            Run <code>cyclops map .</code> to read this project without running
+            it.
+          </p>
+        )}
         <p className="cyc-mapstatus">{status}</p>
         <button onClick={reload}>check again</button>
       </div>

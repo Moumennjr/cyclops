@@ -51,6 +51,54 @@ function readTree(treeFile) {
   }
 }
 
+/**
+ * Reads a JSON file, distinguishing the three states that matter.
+ *
+ * readTree() collapses "not there" and "there but corrupt" into the same null,
+ * so a truncated map.json -- a half-written file, a merge conflict marker, an
+ * interrupted write -- is served as 404 {"error": "no map yet"}. The reader is
+ * told to go and run `cyclops map .`, which will overwrite whatever was there.
+ * That is a wrong instruction sent in response to a recoverable problem.
+ *
+ * Returns { status: "ok" | "absent" | "broken", data, error }.
+ */
+function readJsonFile(file) {
+  if (!existsSync(file)) return { status: "absent", data: null, error: null };
+  let text;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (e) {
+    return { status: "broken", data: null, error: e.message };
+  }
+  if (!text.trim()) {
+    return { status: "broken", data: null, error: "file is empty" };
+  }
+  try {
+    return { status: "ok", data: JSON.parse(text), error: null };
+  } catch (e) {
+    return { status: "broken", data: null, error: e.message };
+  }
+}
+
+// The status a client sees, per artefact. 200 is only ever a real artefact.
+function artifactStatus(result) {
+  return result.status === "ok" ? 200 : 404;
+}
+
+function artifactBody(result, what, hint) {
+  if (result.status === "ok") return JSON.stringify(result.data);
+  if (result.status === "absent") {
+    return JSON.stringify({ error: `no ${what} yet`, hint });
+  }
+  return JSON.stringify({
+    error: `the ${what} is unreadable`,
+    detail: result.error,
+    // Do not say "run cyclops map ." here: that overwrites the file and the
+    // damaged content might still be worth looking at.
+    hint: `${hint} -- but this file exists and does not parse, so it is not simply absent`,
+  });
+}
+
 function send(res, status, body, headers = {}) {
   res.writeHead(status, { "content-type": "text/plain; charset=utf-8", ...headers });
   res.end(body);
@@ -124,22 +172,20 @@ export async function startServer({
     const { pathname } = new URL(req.url, "http://localhost");
 
     if (pathname === "/tree.json") {
-      const tree = readTree(treeFile);
+      const tree = readJsonFile(treeFile);
       return send(
         res,
-        tree ? 200 : 404,
-        tree ? JSON.stringify(tree) : JSON.stringify({ error: "no trace yet" }),
+        artifactStatus(tree),
+        artifactBody(tree, "trace", "run: cyclops <file>"),
         { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
       );
     }
 
     // The static project map: what the codebase looks like, without running it.
     if (pathname === "/map.json") {
-      const map = readTree(mapFile);
+      const map = readJsonFile(mapFile);
       return send(
-        res,
-        map ? 200 : 404,
-        map ? JSON.stringify(map) : JSON.stringify({ error: "no map yet" }),
+        res, artifactStatus(map), artifactBody(map, "map", "run: cyclops map ."),
         { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
       );
     }
@@ -224,21 +270,28 @@ export async function startServer({
     // Text views of the map, mirroring the tree's /summary and /tree.
     if (pathname === "/map.txt" || pathname === "/map.report" ||
         pathname === "/map.edges") {
-      const map = readTree(mapFile);
-      if (!map) {
-        return send(res, 404, "no map yet; run: cyclops map .", {
-          "content-type": "text/plain; charset=utf-8",
-          "cache-control": "no-store",
-        });
+      const map = readJsonFile(mapFile);
+      if (map.status !== "ok") {
+        return send(
+          res,
+          404,
+          map.status === "broken"
+            ? `the map at ${mapFile} is unreadable: ${map.error}\n` +
+              `It exists but does not parse -- not the same as never having run ` +
+              `cyclops map. Delete or repair it, then re-run.`
+            : `no map yet; run: cyclops map .`,
+          { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+        );
       }
+      const mapData = map.data;
       const params = new URL(req.url, "http://localhost").searchParams;
       const focus = params.get("focus");
       const body =
         pathname === "/map.txt"
-          ? renderMap(map)
+          ? renderMap(mapData)
           : pathname === "/map.edges"
-            ? renderMapFlat(map)
-            : renderMapReport(map, { title: focus ? `focus: ${focus}` : null });
+            ? renderMapFlat(mapData)
+            : renderMapReport(mapData, { title: focus ? `focus: ${focus}` : null });
       return send(res, 200, body, {
         "content-type": "text/plain; charset=utf-8",
         "cache-control": "no-store",
@@ -251,9 +304,11 @@ export async function startServer({
         200,
         JSON.stringify({
           treePath: treeFile,
+          treeStatus: readJsonFile(treeFile).status,
           // Absent rather than a path that does not exist: the viewer's mode
           // switch needs to tell "no map yet" from "map at some path".
           mapPath: existsSync(mapFile) ? mapFile : null,
+          mapStatus: readJsonFile(mapFile).status,
           port: server.address()?.port ?? null,
         }),
         { "content-type": "application/json; charset=utf-8" },

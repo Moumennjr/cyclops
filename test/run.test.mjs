@@ -912,6 +912,60 @@ test("a plain module-level call is not mistaken for a shadow", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("the server tells 'no map' apart from 'the map is broken'", async () => {
+  // Both used to be 404 {"error":"no map yet"}, and the viewer's answer to both
+  // was "run: cyclops map ." -- which for a corrupted file means overwriting the
+  // evidence before anyone has looked at it.
+  const dir = mkdtempSync(join(tmpdir(), "cyc-broken-"));
+  const absent = join(dir, "absent.json");
+  const broken = join(dir, "broken.json");
+  const empty = join(dir, "empty.json");
+  writeFileSync(broken, "{truncated");
+  writeFileSync(empty, "   ");
+
+  const { url, close } = await startServer({
+    port: 4755, treePath: absent, mapPath: broken,
+  });
+  try {
+    // treePath is the absent one on this server, so that is where the absent
+    // shape shows up.
+    const absentRes = await fetch(url + "/tree.json");
+    const absentBody = await absentRes.json();
+    assert.equal(absentRes.status, 404);
+    assert.match(absentBody.error, /no trace yet/);
+    assert.match(absentBody.hint, /cyclops/, "and says how to make one");
+
+    const brokenRes = await fetch(url + "/map.json");
+    const brokenBody = await brokenRes.json();
+    assert.equal(brokenRes.status, 404, "still 404 -- it is not usable");
+    assert.match(brokenBody.error, /unreadable/, "but says why");
+    assert.ok(brokenBody.detail, "and includes the parse error");
+    assert.match(brokenBody.hint, /not simply absent/,
+      "and does not send the reader off to overwrite the damaged file");
+
+    const text = await (await fetch(url + "/map.txt")).text();
+    assert.match(text, /exists but does not parse/,
+      "the text view says the same thing");
+
+    const who = await (await fetch(url + "/whoami")).json();
+    assert.equal(who.mapStatus, "broken", "/whoami distinguishes them too");
+    assert.equal(who.treeStatus, "absent");
+  } finally {
+    await close();
+  }
+
+  // An empty file is broken, not absent.
+  const second = await startServer({ port: 4756, mapPath: empty });
+  try {
+    const body = await (await fetch(second.url + "/map.json")).json();
+    assert.match(body.error, /unreadable/);
+    assert.match(body.detail, /empty/);
+  } finally {
+    await second.close();
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("the map lays out every node without collisions", () => {
   // The layout bug this covers was 52 of 98 nodes on top of each other, from
   // a `siblings` list that excluded the node being placed -- so findIndex
