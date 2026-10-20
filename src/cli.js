@@ -111,6 +111,7 @@ function parseMapArgs(argv) {
     if (a === "--report") format = "report";
     else if (a === "--map" || a === "--flat") format = "map";
     else if (a === "--edges") format = "edges";
+    else if (a === "--json") format = "json";
     else if (a === "--open") open = true;
     else if (a === "--no-server") noServer = true;
     else if (a === "--tests") includeTests = true;
@@ -142,6 +143,7 @@ function printMapUsage() {
                       import cycles, functions with no caller
     --map             the whole map as indented text
     --edges           one line per edge, greppable
+    --json            the full map as JSON on stdout (same bytes as --out)
     --open            open the drawn map in the browser
     --out <file>      write the map JSON here (default out/map.json)
     --tests           include test files (excluded by default)
@@ -520,9 +522,15 @@ async function mapMain(argv) {
   // Stamp the build time so a reader can tell whether the map still describes
   // the project (src/map.js: mapStaleness).
   map.generatedAt = new Date().toISOString();
+  // One document, serialized once: --json prints exactly what was written, so
+  // a script that reads stdout and a viewer that reads the file can never
+  // disagree about what the map said.
+  const serialized = JSON.stringify(map, null, 2) + "\n";
   writeFileSync(outFile, JSON.stringify(map, null, 2));
 
-  if (opts.format === "edges") {
+  if (opts.format === "json") {
+    process.stdout.write(serialized);
+  } else if (opts.format === "edges") {
     process.stdout.write(renderMapFlat(map) + "\n");
   } else if (opts.format === "map") {
     process.stdout.write(renderMap(map) + "\n");
@@ -532,7 +540,10 @@ async function mapMain(argv) {
 
   console.error(`[cyclops] map written to ${outFile}`);
 
-  if (opts.skipped && map.skipped.length) {
+  // This gate was dead: opts.skipped is never set by parseMapArgs, so files
+  // that could not be parsed -- and are therefore *absent* from the map -- were
+  // silently missing. A map that quietly omits files is a rumour.
+  if (map.skipped.length) {
     console.error(
       `[cyclops] ${map.skipped.length} file(s) could not be parsed and are absent from the map`,
     );

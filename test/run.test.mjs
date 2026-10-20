@@ -913,6 +913,59 @@ test("a plain module-level call is not mistaken for a shadow", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("--json prints the map document itself, on stdout only", async () => {
+  // For piping into jq, a dashboard, a CI gate. The point is that stdout is
+  // *only* the document -- one stray banner line and JSON.parse explodes in a
+  // script nobody is watching.
+  const root = mkdtempSync(join(tmpdir(), "cyc-json-"));
+  writeFileSync(join(root, "a.js"), "export function a() { return 1; }\n");
+
+  const proc = spawnSync(
+    process.execPath,
+    [CLI, "map", root, "--json", "--out", join(root, "m.json")],
+    { encoding: "utf8", cwd: root },
+  );
+  assert.equal(proc.status, 0, proc.stderr);
+
+  // stdout parses as JSON with nothing before or after it.
+  const printed = JSON.parse(proc.stdout);
+  assert.ok(Array.isArray(printed.nodes) && printed.nodes.length > 0);
+  assert.ok(printed.generatedAt, "the printed map is stamped");
+
+  // ... and it is the same document that was written to --out, byte for byte
+  // apart from the trailing newline. Two sources of truth that can disagree is
+  // exactly the confusion --json exists to remove.
+  const written = JSON.parse(readFileSync(join(root, "m.json"), "utf8"));
+  assert.deepEqual(printed, written, "stdout and the file agree");
+
+  // The human notices go to stderr, not into the JSON.
+  assert.match(proc.stderr, /map written to/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("unparseable files are announced, not silently dropped", () => {
+  // opts.skipped was never set by parseMapArgs, so this warning was dead code:
+  // a file that failed to parse simply vanished from the map with no signal at
+  // all. A map that quietly omits files is a rumour.
+  const root = mkdtempSync(join(tmpdir(), "cyc-skip-"));
+  writeFileSync(join(root, "good.js"), "export function ok() { return 1; }\n");
+  writeFileSync(join(root, "bad.js"), "function {{{ not javascript\n");
+
+  const map = buildMap(root, { cwd: root });
+  assert.equal(map.skipped.length, 1, "the bad file is recorded as skipped");
+  assert.match(map.skipped[0].file ?? map.skipped[0], /bad\.js/);
+
+  const proc = spawnSync(
+    process.execPath,
+    [CLI, "map", root, "--out", join(root, "m.json")],
+    { encoding: "utf8", cwd: root },
+  );
+  assert.equal(proc.status, 0, proc.stderr);
+  assert.match(proc.stderr, /could not be parsed and are absent/,
+    "and the CLI says so out loud");
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("map staleness separates a current map from a stale one", () => {
   // A map is a photograph. Without a timestamp it is a photograph nobody can
   // date, and the viewer will present a picture of a rewritten project as if
